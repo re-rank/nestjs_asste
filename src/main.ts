@@ -10,11 +10,19 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   // Cloudtype은 PORT 환경 변수를 직접 주입하므로 process.env.PORT 우선 사용
   const port = process.env.PORT || configService.get<number>('port') || 3001;
-  const frontendUrl = configService.get<string>('frontendUrl');
+
+  // CORS 허용 도메인 목록
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://asset-management-re-rank.vercel.app',
+    'https://asset-management-git-main-re-rank.vercel.app',
+    /\.vercel\.app$/,  // 모든 Vercel 도메인 허용
+  ];
 
   // CORS 설정
   app.enableCors({
-    origin: frontendUrl || '*',
+    origin: allowedOrigins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
