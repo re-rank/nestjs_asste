@@ -69,44 +69,54 @@ export class AIProviderService {
 
   /**
    * 매매 판단 프롬프트 생성
+   * @param market 현재 거래 가능한 시장 (KR 또는 US)
    */
-  private buildAnalysisPrompt(
+  buildAnalysisPrompt(
     holdings: AIHolding[],
     cash: number,
     marketData: MarketDataSnapshot,
+    market: 'KR' | 'US',
   ): string {
+    const currencySymbol = market === 'KR' ? '₩' : '$';
+    const marketName = market === 'KR' ? '한국' : '미국';
+
     const holdingsText =
       holdings.length > 0
         ? holdings
             .map(
               (h) =>
-                `- ${h.stockName || h.ticker} (${h.market}): ${h.shares}주 @ ₩${h.avgPrice.toLocaleString()} (현재가: ₩${h.currentPrice?.toLocaleString() || 'N/A'})`,
+                `- ${h.stockName || h.ticker}: ${h.shares}주 @ ${currencySymbol}${h.avgPrice.toLocaleString()} (현재가: ${currencySymbol}${h.currentPrice?.toLocaleString() || 'N/A'})`,
             )
             .join('\n')
         : '없음';
 
-    const marketText = marketData.stocks
+    // 현재 시장 종목만 필터링
+    const filteredStocks = marketData.stocks.filter((s) => s.market === market);
+    const marketText = filteredStocks
       .map(
         (s) =>
-          `- ${s.name} (${s.ticker}, ${s.market}): ${s.market === 'KR' ? '₩' : '$'}${s.price.toLocaleString()} (${s.changePercent >= 0 ? '+' : ''}${s.changePercent.toFixed(2)}%)`,
+          `- ${s.name} (${s.ticker}): ${currencySymbol}${s.price.toLocaleString()} (${s.changePercent >= 0 ? '+' : ''}${s.changePercent.toFixed(2)}%)`,
       )
       .join('\n');
 
-    return `당신은 전문 주식 투자 AI입니다. 현재 시장 상황을 분석하고 매매 결정을 내려주세요.
+    return `당신은 전문 주식 투자 AI입니다. 현재 ${marketName} 시장 상황을 분석하고 매매 결정을 내려주세요.
 
-## 현재 포트폴리오 상태
-- 현금: ₩${cash.toLocaleString()}
-- 보유 종목:
+## 현재 거래 시장: ${marketName} (${market})
+- 주의: ${marketName} 시장 종목만 거래 가능합니다.
+- 현금: ${currencySymbol}${cash.toLocaleString()}
+
+## 보유 종목 (${marketName} 시장)
 ${holdingsText}
 
-## 현재 시장 데이터 (${marketData.timestamp})
+## ${marketName} 시장 데이터 (${marketData.timestamp})
 ${marketText}
 
 ## 지시사항
-1. 현재 시장 상황을 분석하세요.
-2. 매수, 매도, 또는 관망 중 하나를 결정하세요.
-3. 필요하다면 환전을 결정하세요 (미국 주식 거래 준비 등).
-4. 결정 이유를 간략히 설명하세요.
+1. 현재 ${marketName} 시장 상황을 분석하세요.
+2. 위 목록에 있는 종목 중에서만 매수/매도를 결정하세요.
+3. 매수, 매도, 또는 관망 중 하나를 결정하세요.
+4. 필요하다면 환전을 결정하세요 (${market === 'US' ? '달러가 부족하면 원화→달러 환전' : '원화가 부족하면 달러→원화 환전'}).
+5. 결정 이유를 간략히 설명하세요.
 
 ## 투자 원칙 (중요!)
 - 신중하게 판단하세요. 확실하지 않으면 HOLD를 선택하세요.
@@ -117,9 +127,8 @@ ${marketText}
 ## 응답 형식 (반드시 JSON 형식으로 응답)
 {
   "action": "BUY" | "SELL" | "HOLD",
-  "ticker": "종목코드 (BUY/SELL인 경우)",
-  "stockName": "종목명 (BUY/SELL인 경우, 예: 삼성전자, Apple)",
-  "market": "KR" | "US" (BUY/SELL인 경우)",
+  "ticker": "종목코드 (BUY/SELL인 경우, 위 목록에서만 선택)",
+  "stockName": "종목명 (BUY/SELL인 경우)",
   "shares": 매매수량 (BUY/SELL인 경우, 정수),
   "reasoning": "결정 이유 (한국어, 2-3문장)",
   "confidence": 0-100 (확신도),
@@ -132,9 +141,10 @@ ${marketText}
 }
 
 중요:
+- 반드시 위 ${marketName} 시장 종목 목록에서만 선택하세요.
 - 매수 시 현금 잔고를 초과하지 마세요.
 - 매도 시 보유 수량을 초과하지 마세요.
-- 환전은 선택사항입니다. 미국 주식을 살 계획이 있으면 원화를 달러로 환전하세요.
+- 환전은 선택사항입니다. ${market === 'US' ? '달러가 부족하면 원화를 달러로 환전하세요.' : '원화가 부족하면 달러를 원화로 환전하세요.'}
 - 무리한 거래보다 HOLD를 선택하는 것이 나을 수 있습니다.
 - 반드시 유효한 JSON만 응답하세요.`;
   }
@@ -366,12 +376,14 @@ ${marketText}
 
   /**
    * AI 매매 판단 요청
+   * @param market 현재 거래 가능한 시장 (KR 또는 US)
    */
   async requestTradeAnalysis(
     provider: AIProvider,
     holdings: AIHolding[],
     cash: number,
     marketData: MarketDataSnapshot,
+    market: 'KR' | 'US',
   ): Promise<TradeDecision | null> {
     const keyStatus = this.getAPIKeyStatus(provider);
 
@@ -385,7 +397,7 @@ ${marketText}
       return null;
     }
 
-    const prompt = this.buildAnalysisPrompt(holdings, cash, marketData);
+    const prompt = this.buildAnalysisPrompt(holdings, cash, marketData, market);
 
     try {
       let response: string;

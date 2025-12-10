@@ -470,12 +470,13 @@ export class TradingService {
           `[${model.name}] 분석 시작 - ${market} 시장, 잔고: ${cash.toLocaleString()}`,
         );
 
-        // AI 분석 요청
+        // AI 분석 요청 (현재 시장 종목만 분석)
         const decision = await this.aiProviderService.requestTradeAnalysis(
           model.provider,
           marketHoldings,
           cash,
           marketData,
+          market,
         );
 
         if (decision === null) {

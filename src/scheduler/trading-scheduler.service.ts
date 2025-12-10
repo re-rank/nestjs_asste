@@ -54,12 +54,15 @@ export class TradingSchedulerService implements OnModuleInit {
 
   /**
    * 현재 시장이 열려있는지 확인
+   * 서버가 UTC로 동작하므로 KST로 변환하여 계산
    */
   isMarketOpen(market: Market): boolean {
     const now = new Date();
-    const kstHours = now.getHours();
-    const kstMinutes = now.getMinutes();
-    const dayOfWeek = now.getDay();
+    // UTC를 KST로 변환 (UTC + 9시간)
+    const kstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const kstHours = kstTime.getUTCHours();
+    const kstMinutes = kstTime.getUTCMinutes();
+    const dayOfWeek = kstTime.getUTCDay();
 
     // 주말이면 닫힘
     if (dayOfWeek === 0 || dayOfWeek === 6) {
