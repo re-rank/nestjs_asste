@@ -8,7 +8,8 @@ async function bootstrap() {
 
   // ConfigService 가져오기
   const configService = app.get(ConfigService);
-  const port = configService.get<number>('port') || 3001;
+  // Cloudtype은 PORT 환경 변수를 직접 주입하므로 process.env.PORT 우선 사용
+  const port = process.env.PORT || configService.get<number>('port') || 3001;
   const frontendUrl = configService.get<string>('frontendUrl');
 
   // CORS 설정

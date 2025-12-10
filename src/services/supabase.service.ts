@@ -24,16 +24,21 @@ export class SupabaseService implements OnModuleInit {
   constructor(private configService: ConfigService) {}
 
   onModuleInit() {
-    const url = this.configService.get<string>('supabase.url');
-    const key = this.configService.get<string>('supabase.serviceRoleKey');
+    // Cloudtype 환경 변수 직접 접근 (ConfigService보다 우선)
+    const url = process.env.SUPABASE_URL || this.configService.get<string>('supabase.url');
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || this.configService.get<string>('supabase.serviceRoleKey');
+
+    this.logger.log(`Supabase URL: ${url ? 'configured' : 'missing'}`);
+    this.logger.log(`Supabase Key: ${key ? 'configured' : 'missing'}`);
 
     if (!url || !key) {
       this.logger.warn('Supabase credentials not configured');
+      this.logger.warn(`Check environment variables: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY`);
       return;
     }
 
     this.supabase = createClient(url, key);
-    this.logger.log('Supabase client initialized');
+    this.logger.log('Supabase client initialized successfully');
   }
 
   getClient(): SupabaseClient {
