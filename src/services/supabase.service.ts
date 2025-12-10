@@ -356,6 +356,28 @@ export class SupabaseService implements OnModuleInit {
     });
   }
 
+  async getRecentTradesByModel(
+    modelId: string,
+    hours: number = 24,
+  ): Promise<DBTrade[]> {
+    const startDate = new Date();
+    startDate.setHours(startDate.getHours() - hours);
+
+    const { data, error } = await this.supabase
+      .from('ai_trades')
+      .select('*')
+      .eq('model_id', modelId)
+      .gte('created_at', startDate.toISOString())
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      this.logger.error('Failed to fetch recent trades:', error);
+      return [];
+    }
+
+    return data as DBTrade[];
+  }
+
   // ========== Portfolio History ==========
 
   async recordPortfolioValue(

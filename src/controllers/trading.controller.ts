@@ -7,13 +7,19 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { TradingSchedulerService } from '../scheduler/trading-scheduler.service';
-import type { Market } from '../types/ai-trading.types';
+import { AIProviderService } from '../services/ai-provider.service';
+import { SupabaseService } from '../services/supabase.service';
+import type { Market, AIProvider } from '../types/ai-trading.types';
 
 @Controller()
 export class TradingController {
   private startTime = Date.now();
 
-  constructor(private tradingSchedulerService: TradingSchedulerService) {}
+  constructor(
+    private tradingSchedulerService: TradingSchedulerService,
+    private aiProviderService: AIProviderService,
+    private supabaseService: SupabaseService,
+  ) {}
 
   /**
    * Health check endpoint
@@ -104,6 +110,49 @@ export class TradingController {
     };
   }
 
+  /**
+   * AI 프로바이더 연결 상태 확인 (백엔드 기준)
+   */
+  @Get('api/ai-health')
+  async getAIHealth() {
+    const providers: AIProvider[] = [
+      'openai',
+      'anthropic',
+      'google',
+      'xai',
+      'deepseek',
+    ];
+    const models = await this.supabaseService.getAIModels();
+
+    const healthStatuses = await Promise.all(
+      models.map(async (model) => {
+        const keyStatus = this.aiProviderService.getAPIKeyStatus(model.provider);
+
+        // 최근 24시간 거래 횟수 조회
+        const recentTrades = await this.supabaseService.getRecentTradesByModel(
+          model.id,
+          24,
+        );
+
+        return {
+          provider: model.provider,
+          name: model.name,
+          hasKey: keyStatus.hasKey,
+          isValid: keyStatus.isValid,
+          error: keyStatus.error,
+          apiKeyStatus: this.getApiKeyStatusLabel(keyStatus),
+          tradesLast24h: recentTrades.length,
+          lastTradeTime: recentTrades[0]?.created_at || null,
+        };
+      }),
+    );
+
+    return {
+      timestamp: new Date().toISOString(),
+      providers: healthStatuses,
+    };
+  }
+
   private formatUptime(seconds: number): string {
     const days = Math.floor(seconds / 86400);
     const hours = Math.floor((seconds % 86400) / 3600);
@@ -117,6 +166,16 @@ export class TradingController {
     parts.push(`${secs}s`);
 
     return parts.join(' ');
+  }
+
+  private getApiKeyStatusLabel(keyStatus: {
+    hasKey: boolean;
+    isValid: boolean;
+    error?: string;
+  }): 'valid' | 'missing' | 'invalid' {
+    if (!keyStatus.hasKey) return 'missing';
+    if (!keyStatus.isValid) return 'invalid';
+    return 'valid';
   }
 
   private isDaylightSavingTime(): boolean {
