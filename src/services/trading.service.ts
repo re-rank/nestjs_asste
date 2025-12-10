@@ -1,0 +1,556 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { SupabaseService } from './supabase.service';
+import { AIProviderService } from './ai-provider.service';
+import { StockPriceService } from './stock-price.service';
+import { NotificationService } from './notification.service';
+import type {
+  AIModel,
+  AIHolding,
+  AITrade,
+  Market,
+  TradeDecision,
+  MarketDataSnapshot,
+  StockSnapshot,
+  TradingRoundResult,
+} from '../types/ai-trading.types';
+
+@Injectable()
+export class TradingService {
+  private readonly logger = new Logger(TradingService.name);
+
+  constructor(
+    private supabaseService: SupabaseService,
+    private aiProviderService: AIProviderService,
+    private stockPriceService: StockPriceService,
+    private notificationService: NotificationService,
+  ) {}
+
+  /**
+   * 시장 데이터 스냅샷 생성
+   */
+  async getMarketSnapshot(): Promise<MarketDataSnapshot> {
+    const stocks: StockSnapshot[] = [];
+    const { KR, US } = await this.stockPriceService.fetchAllStocks();
+
+    const tickers = [
+      ...KR.map((s) => ({ ticker: s.ticker, market: 'KR' as const })),
+      ...US.map((s) => ({ ticker: s.ticker, market: 'US' as const })),
+    ];
+
+    const quotesMap = await this.stockPriceService.getBatchStockQuotes(tickers);
+
+    for (const stock of KR) {
+      const quote = quotesMap.get(stock.ticker);
+      if (quote) {
+        stocks.push({
+          ticker: stock.ticker,
+          name: stock.name,
+          market: 'KR',
+          price: quote.price,
+          change: quote.change,
+          changePercent: quote.changePercent,
+          volume: quote.volume,
+          high: quote.high,
+          low: quote.low,
+        });
+      }
+    }
+
+    for (const stock of US) {
+      const quote = quotesMap.get(stock.ticker);
+      if (quote) {
+        stocks.push({
+          ticker: stock.ticker,
+          name: stock.name,
+          market: 'US',
+          price: quote.price,
+          change: quote.change,
+          changePercent: quote.changePercent,
+          volume: quote.volume,
+          high: quote.high,
+          low: quote.low,
+        });
+      }
+    }
+
+    return {
+      stocks,
+      indices: [],
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * 환전: 원화 → 달러
+   */
+  async exchangeKRWtoUSD(
+    modelId: string,
+    krwAmount: number,
+  ): Promise<{ success: boolean; usdAmount?: number; error?: string }> {
+    const exchangeRate = await this.stockPriceService.getExchangeRate();
+    const usdAmount = krwAmount / exchangeRate;
+
+    const { krwBalance, usdBalance } =
+      await this.supabaseService.getCurrencyBalances(modelId);
+
+    if (krwBalance < krwAmount) {
+      return { success: false, error: '원화 잔고가 부족합니다.' };
+    }
+
+    const updated = await this.supabaseService.updateCashBalance(
+      modelId,
+      krwBalance - krwAmount,
+      usdBalance + usdAmount,
+    );
+
+    if (!updated) {
+      return { success: false, error: '잔고 업데이트 실패' };
+    }
+
+    await this.supabaseService.recordExchange(
+      modelId,
+      'KRW_TO_USD',
+      krwAmount,
+      usdAmount,
+      exchangeRate,
+    );
+
+    return { success: true, usdAmount };
+  }
+
+  /**
+   * 환전: 달러 → 원화
+   */
+  async exchangeUSDtoKRW(
+    modelId: string,
+    usdAmount: number,
+  ): Promise<{ success: boolean; krwAmount?: number; error?: string }> {
+    const exchangeRate = await this.stockPriceService.getExchangeRate();
+    const krwAmount = usdAmount * exchangeRate;
+
+    const { krwBalance, usdBalance } =
+      await this.supabaseService.getCurrencyBalances(modelId);
+
+    if (usdBalance < usdAmount) {
+      return { success: false, error: '달러 잔고가 부족합니다.' };
+    }
+
+    const updated = await this.supabaseService.updateCashBalance(
+      modelId,
+      krwBalance + krwAmount,
+      usdBalance - usdAmount,
+    );
+
+    if (!updated) {
+      return { success: false, error: '잔고 업데이트 실패' };
+    }
+
+    await this.supabaseService.recordExchange(
+      modelId,
+      'USD_TO_KRW',
+      krwAmount,
+      usdAmount,
+      exchangeRate,
+    );
+
+    return { success: true, krwAmount };
+  }
+
+  /**
+   * 매매 실행
+   */
+  async executeTrade(
+    modelId: string,
+    ticker: string,
+    stockName: string,
+    market: Market,
+    tradeType: 'BUY' | 'SELL',
+    shares: number,
+    price: number,
+    reasoning?: string,
+    scenario?: string,
+  ): Promise<AITrade | null> {
+    const totalAmount = shares * price;
+    const { krwBalance, usdBalance } =
+      await this.supabaseService.getCurrencyBalances(modelId);
+
+    if (tradeType === 'BUY') {
+      if (market === 'KR') {
+        // 한국 주식 매수: 원화 사용
+        if (krwBalance < totalAmount) {
+          this.logger.error('Insufficient KRW balance for buy order');
+          return null;
+        }
+
+        const updated = await this.supabaseService.updateCashBalance(
+          modelId,
+          krwBalance - totalAmount,
+          usdBalance,
+        );
+        if (!updated) return null;
+      } else {
+        // 미국 주식 매수: 달러 사용
+        if (usdBalance < totalAmount) {
+          // 달러 부족 시 자동 환전
+          const neededUSD = totalAmount - usdBalance;
+          const exchangeRate = await this.stockPriceService.getExchangeRate();
+          const neededKRW = neededUSD * exchangeRate * 1.01;
+
+          if (krwBalance < neededKRW) {
+            this.logger.error('Insufficient balance for buy order');
+            return null;
+          }
+
+          const exchangeResult = await this.exchangeKRWtoUSD(modelId, neededKRW);
+          if (!exchangeResult.success) {
+            this.logger.error('Failed to auto-exchange');
+            return null;
+          }
+
+          const newBalances =
+            await this.supabaseService.getCurrencyBalances(modelId);
+          const updated = await this.supabaseService.updateCashBalance(
+            modelId,
+            newBalances.krwBalance,
+            newBalances.usdBalance - totalAmount,
+          );
+          if (!updated) return null;
+        } else {
+          const updated = await this.supabaseService.updateCashBalance(
+            modelId,
+            krwBalance,
+            usdBalance - totalAmount,
+          );
+          if (!updated) return null;
+        }
+      }
+
+      // 기존 보유 종목 확인
+      const existingHolding = await this.supabaseService.getHoldingByTicker(
+        modelId,
+        ticker,
+        market,
+      );
+
+      if (existingHolding) {
+        const existingShares = Number(existingHolding.shares);
+        const existingAvgPrice = Number(existingHolding.avg_price);
+        const newTotalShares = existingShares + shares;
+        const newAvgPrice =
+          (existingShares * existingAvgPrice + shares * price) / newTotalShares;
+
+        const updated = await this.supabaseService.updateHolding(
+          existingHolding.id,
+          {
+            shares: newTotalShares,
+            avgPrice: newAvgPrice,
+            currentPrice: price,
+          },
+        );
+        if (!updated) return null;
+      } else {
+        const inserted = await this.supabaseService.insertHolding(
+          modelId,
+          ticker,
+          market,
+          shares,
+          price,
+        );
+        if (!inserted) return null;
+      }
+    } else {
+      // 매도
+      const existingHolding = await this.supabaseService.getHoldingByTicker(
+        modelId,
+        ticker,
+        market,
+      );
+
+      if (!existingHolding) {
+        this.logger.error('No holding found for sell order');
+        return null;
+      }
+
+      const existingShares = Number(existingHolding.shares);
+      if (existingShares < shares) {
+        this.logger.error('Insufficient shares for sell order');
+        return null;
+      }
+
+      // 현금 추가
+      if (market === 'KR') {
+        const updated = await this.supabaseService.updateCashBalance(
+          modelId,
+          krwBalance + totalAmount,
+          usdBalance,
+        );
+        if (!updated) return null;
+      } else {
+        const updated = await this.supabaseService.updateCashBalance(
+          modelId,
+          krwBalance,
+          usdBalance + totalAmount,
+        );
+        if (!updated) return null;
+      }
+
+      if (existingShares === shares) {
+        const deleted = await this.supabaseService.deleteHolding(
+          existingHolding.id,
+        );
+        if (!deleted) return null;
+      } else {
+        const updated = await this.supabaseService.updateHolding(
+          existingHolding.id,
+          {
+            shares: existingShares - shares,
+            currentPrice: price,
+          },
+        );
+        if (!updated) return null;
+      }
+    }
+
+    // 매매 내역 기록
+    return await this.supabaseService.recordTrade({
+      modelId,
+      ticker,
+      stockName,
+      market,
+      tradeType,
+      shares,
+      price,
+      reasoning,
+      scenario,
+    });
+  }
+
+  /**
+   * AI 매매 결정 실행
+   */
+  private async executeTradeDecision(
+    model: AIModel,
+    decision: TradeDecision,
+    market: Market,
+  ): Promise<boolean> {
+    // 1. 환전 결정 처리
+    if (decision.exchange) {
+      this.logger.log(
+        `💱 ${model.name}: AI가 환전 결정 - ${decision.exchange.reason}`,
+      );
+
+      if (decision.exchange.type === 'KRW_TO_USD') {
+        const result = await this.exchangeKRWtoUSD(
+          model.id,
+          decision.exchange.amount,
+        );
+        if (result.success) {
+          this.logger.log(
+            `  ✅ ${decision.exchange.amount.toLocaleString()} KRW → ${result.usdAmount?.toFixed(2)} USD`,
+          );
+        } else {
+          this.logger.error(`  ❌ 환전 실패: ${result.error}`);
+        }
+      } else {
+        const result = await this.exchangeUSDtoKRW(
+          model.id,
+          decision.exchange.amount,
+        );
+        if (result.success) {
+          this.logger.log(
+            `  ✅ ${decision.exchange.amount.toFixed(2)} USD → ${result.krwAmount?.toLocaleString()} KRW`,
+          );
+        } else {
+          this.logger.error(`  ❌ 환전 실패: ${result.error}`);
+        }
+      }
+    }
+
+    // 2. 매매 결정 실행
+    if (decision.action === 'HOLD') {
+      this.logger.log(
+        `[${model.name}] HOLD 결정 - 매매 없음: ${decision.reasoning}`,
+      );
+      await this.supabaseService.recordHoldScenario(
+        model.id,
+        market,
+        decision.reasoning,
+      );
+      return false;
+    }
+
+    const { ticker, shares, stockName } = decision;
+
+    if (!ticker || !shares || shares <= 0) {
+      this.logger.error(`[${model.name}] 잘못된 매매 결정:`, decision);
+      return false;
+    }
+
+    // 실시간 가격 조회
+    const quote =
+      market === 'KR'
+        ? await this.stockPriceService.getKoreanStockQuote(ticker)
+        : await this.stockPriceService.getUSStockQuote(ticker);
+
+    if (!quote || quote.price <= 0) {
+      this.logger.error(`[${model.name}] 가격 조회 실패: ${ticker}`);
+      return false;
+    }
+
+    // 매매 실행
+    const trade = await this.executeTrade(
+      model.id,
+      ticker,
+      stockName || ticker,
+      market,
+      decision.action,
+      shares,
+      quote.price,
+      decision.reasoning,
+      decision.scenario,
+    );
+
+    if (trade) {
+      this.logger.log(
+        `[${model.name}] ${decision.action} 완료: ${ticker} ${shares}주 @ ${market === 'KR' ? '₩' : '$'}${quote.price.toLocaleString()}`,
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * 특정 시장에 대해 모든 AI 모델의 매매 분석 및 실행
+   */
+  async runMarketTradingRound(market: Market): Promise<TradingRoundResult> {
+    this.logger.log(`\n=== ${market} 시장 트레이딩 라운드 시작 ===`);
+
+    const results: Array<{ model: string; action: string; ticker?: string }> =
+      [];
+    let tradesExecuted = 0;
+
+    try {
+      const models = await this.supabaseService.getAIModels();
+
+      if (models.length === 0) {
+        this.logger.log('활성 AI 모델이 없습니다.');
+        return { success: false, tradesExecuted: 0, results };
+      }
+
+      const marketData = await this.getMarketSnapshot();
+      await this.stockPriceService.getExchangeRate();
+
+      for (const model of models) {
+        // 오늘 이미 매매했는지 확인
+        const alreadyTraded = await this.supabaseService.hasTradedToday(
+          model.id,
+          market,
+        );
+        if (alreadyTraded) {
+          this.logger.log(
+            `[${model.name}] 오늘 ${market} 시장에서 이미 매매함 - 스킵`,
+          );
+          results.push({ model: model.name, action: 'SKIPPED_ALREADY_TRADED' });
+          continue;
+        }
+
+        // 보유 종목 조회
+        const holdings = await this.supabaseService.getHoldings(model.id);
+        const marketHoldings = holdings.filter((h) => h.market === market);
+
+        // 잔고 조회
+        const balances = await this.supabaseService.getCurrencyBalances(
+          model.id,
+        );
+        const cash =
+          market === 'KR' ? balances.krwBalance : balances.usdBalance;
+
+        this.logger.log(
+          `[${model.name}] 분석 시작 - ${market} 시장, 잔고: ${cash.toLocaleString()}`,
+        );
+
+        // AI 분석 요청
+        const decision = await this.aiProviderService.requestTradeAnalysis(
+          model.provider,
+          marketHoldings,
+          cash,
+          marketData,
+        );
+
+        if (decision === null) {
+          this.logger.log(
+            `[${model.name}] API 키 미설정 또는 오류 - 거래 건너뜀`,
+          );
+          results.push({
+            model: model.name,
+            action: 'SKIPPED_API_ERROR',
+            ticker: '',
+          });
+          continue;
+        }
+
+        // 매매 실행
+        const executed = await this.executeTradeDecision(
+          model,
+          decision,
+          market,
+        );
+
+        if (executed) {
+          tradesExecuted++;
+        }
+
+        results.push({
+          model: model.name,
+          action: decision.action,
+          ticker: decision.ticker,
+        });
+
+        // API 호출 간격 유지
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
+      this.logger.log(
+        `=== ${market} 시장 트레이딩 라운드 완료: ${tradesExecuted}건 체결 ===\n`,
+      );
+
+      // 알림 전송
+      if (tradesExecuted > 0) {
+        await this.notificationService.sendNotification(
+          `${market === 'KR' ? '🇰🇷 국내' : '🇺🇸 미국'} 매매 ${tradesExecuted}건 체결`,
+        );
+      }
+
+      return { success: true, tradesExecuted, results };
+    } catch (error) {
+      this.logger.error(`${market} 시장 트레이딩 라운드 실패:`, error);
+      return { success: false, tradesExecuted, results };
+    }
+  }
+
+  /**
+   * 포트폴리오 가치 기록
+   */
+  async recordAllPortfolioValues(): Promise<void> {
+    const models = await this.supabaseService.getAIModels();
+    const exchangeRate = await this.stockPriceService.getExchangeRate();
+
+    for (const model of models) {
+      const holdings = await this.supabaseService.getHoldings(model.id);
+      const balances = await this.supabaseService.getCurrencyBalances(model.id);
+
+      const cash =
+        balances.krwBalance + balances.usdBalance * exchangeRate;
+      const holdingsValue = holdings.reduce(
+        (sum, h) => sum + (h.totalValue || 0),
+        0,
+      );
+      const totalValue = cash + holdingsValue;
+
+      await this.supabaseService.recordPortfolioValue(model.id, totalValue);
+    }
+
+    this.logger.log('📊 포트폴리오 가치 기록 완료');
+  }
+}

@@ -1,8 +1,8 @@
 {
-  "name": "nest-typescript-starter",
+  "name": "ai-trading-backend",
   "private": true,
   "version": "1.0.0",
-  "description": "Nest TypeScript starter repository",
+  "description": "AI Trading Arena Backend Server",
   "license": "MIT",
   "scripts": {
     "prebuild": "rimraf dist",
@@ -21,9 +21,12 @@
   },
   "dependencies": {
     "@nestjs/common": "^9.0.0",
+    "@nestjs/config": "^3.0.0",
     "@nestjs/core": "^9.0.0",
     "@nestjs/platform-express": "^9.0.0",
+    "@nestjs/schedule": "^4.0.0",
     "@nestjs/serve-static": "^3.0.1",
+    "@supabase/supabase-js": "^2.86.0",
     "ejs": "^3.1.9",
     "reflect-metadata": "^0.1.13",
     "rimraf": "^3.0.2",
@@ -33,6 +36,7 @@
     "@nestjs/cli": "^9.0.0",
     "@nestjs/schematics": "^9.0.0",
     "@nestjs/testing": "^9.0.0",
+    "@types/cron": "^2.0.0",
     "@types/express": "^4.17.13",
     "@types/jest": "^28.1.4",
     "@types/node": "^18.0.3",
