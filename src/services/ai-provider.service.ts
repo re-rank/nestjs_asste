@@ -1283,6 +1283,7 @@ ${marketText}
 
       if (!response.ok) {
         const error = await response.text();
+        this.logger.error(`Google API error details: ${error}`);
         throw new Error(`Google API error: ${response.status} - ${error}`);
       }
 
@@ -1326,10 +1327,18 @@ ${marketText}
             toolArgs as Record<string, unknown>,
           );
 
-          // Gemini API는 response가 반드시 객체여야 함
-          const responseObj = typeof result === 'object' && result !== null
-            ? result as Record<string, unknown>
-            : { result };
+          // Gemini API는 response가 반드시 객체여야 하고, 배열이 아니어야 함
+          let responseObj: Record<string, unknown>;
+          
+          if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+            responseObj = result as Record<string, unknown>;
+          } else if (Array.isArray(result)) {
+            // 배열인 경우 items 키로 감싸기
+            responseObj = { items: result };
+          } else {
+            // 원시 타입인 경우 value 키로 감싸기
+            responseObj = { value: result };
+          }
 
           functionResponseParts.push({
             functionResponse: {
@@ -1340,6 +1349,8 @@ ${marketText}
         }
 
         // Gemini API는 function response를 user role로 전송해야 함
+        this.logger.debug(`📤 Sending ${functionResponseParts.length} function responses to Gemini`);
+        
         contents.push({
           role: 'user',
           parts: functionResponseParts,
