@@ -82,24 +82,38 @@ export class TradingService {
 
   /**
    * 환전: 원화 → 달러
+   * 안전 제한: 최대 80%까지만 환전 가능
    */
   async exchangeKRWtoUSD(
     modelId: string,
     krwAmount: number,
   ): Promise<{ success: boolean; usdAmount?: number; error?: string }> {
     const exchangeRate = await this.stockPriceService.getExchangeRate();
-    const usdAmount = krwAmount / exchangeRate;
 
     const { krwBalance, usdBalance } =
       await this.supabaseService.getCurrencyBalances(modelId);
 
-    if (krwBalance < krwAmount) {
+    // 안전 제한: 최대 80%까지만 환전 허용
+    const maxExchangeAmount = krwBalance * 0.8;
+    const actualKrwAmount = Math.min(krwAmount, maxExchangeAmount);
+
+    if (actualKrwAmount <= 0) {
+      return { success: false, error: '환전할 원화가 없습니다.' };
+    }
+
+    if (krwBalance < actualKrwAmount) {
       return { success: false, error: '원화 잔고가 부족합니다.' };
     }
 
+    const usdAmount = actualKrwAmount / exchangeRate;
+
+    this.logger.log(
+      `💱 KRW→USD 환전: 요청 ${krwAmount.toLocaleString()}원 → 실제 ${actualKrwAmount.toLocaleString()}원 (최대 80% 제한)`,
+    );
+
     const updated = await this.supabaseService.updateCashBalance(
       modelId,
-      krwBalance - krwAmount,
+      krwBalance - actualKrwAmount,
       usdBalance + usdAmount,
     );
 
@@ -110,7 +124,7 @@ export class TradingService {
     await this.supabaseService.recordExchange(
       modelId,
       'KRW_TO_USD',
-      krwAmount,
+      actualKrwAmount,
       usdAmount,
       exchangeRate,
     );
@@ -120,25 +134,39 @@ export class TradingService {
 
   /**
    * 환전: 달러 → 원화
+   * 안전 제한: 최대 80%까지만 환전 가능
    */
   async exchangeUSDtoKRW(
     modelId: string,
     usdAmount: number,
   ): Promise<{ success: boolean; krwAmount?: number; error?: string }> {
     const exchangeRate = await this.stockPriceService.getExchangeRate();
-    const krwAmount = usdAmount * exchangeRate;
 
     const { krwBalance, usdBalance } =
       await this.supabaseService.getCurrencyBalances(modelId);
 
-    if (usdBalance < usdAmount) {
+    // 안전 제한: 최대 80%까지만 환전 허용
+    const maxExchangeAmount = usdBalance * 0.8;
+    const actualUsdAmount = Math.min(usdAmount, maxExchangeAmount);
+
+    if (actualUsdAmount <= 0) {
+      return { success: false, error: '환전할 달러가 없습니다.' };
+    }
+
+    if (usdBalance < actualUsdAmount) {
       return { success: false, error: '달러 잔고가 부족합니다.' };
     }
+
+    const krwAmount = actualUsdAmount * exchangeRate;
+
+    this.logger.log(
+      `💱 USD→KRW 환전: 요청 $${usdAmount.toFixed(2)} → 실제 $${actualUsdAmount.toFixed(2)} (최대 80% 제한)`,
+    );
 
     const updated = await this.supabaseService.updateCashBalance(
       modelId,
       krwBalance + krwAmount,
-      usdBalance - usdAmount,
+      usdBalance - actualUsdAmount,
     );
 
     if (!updated) {
@@ -149,7 +177,7 @@ export class TradingService {
       modelId,
       'USD_TO_KRW',
       krwAmount,
-      usdAmount,
+      actualUsdAmount,
       exchangeRate,
     );
 
