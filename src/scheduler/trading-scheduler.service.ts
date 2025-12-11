@@ -17,7 +17,7 @@ export class TradingSchedulerService implements OnModuleInit {
     this.logger.log('🤖 Trading Scheduler initialized');
     this.logger.log('📅 Trading schedules configured:');
     this.logger.log('   - Trading check: every 30 minutes');
-    this.logger.log('   - Portfolio record: every hour');
+    this.logger.log('   - Portfolio record: every 30 minutes');
   }
 
   /**
@@ -167,9 +167,9 @@ export class TradingSchedulerService implements OnModuleInit {
   }
 
   /**
-   * 매 정시에 포트폴리오 가치 기록
+   * 30분마다 포트폴리오 가치 기록
    */
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_30_MINUTES)
   async handlePortfolioRecord() {
     this.logger.log('📊 Recording portfolio values...');
     try {
