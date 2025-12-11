@@ -73,12 +73,13 @@ export class AIProviderService {
    */
   buildAnalysisPrompt(
     holdings: AIHolding[],
-    cash: number,
+    balances: { krwBalance: number; usdBalance: number },
     marketData: MarketDataSnapshot,
     market: 'KR' | 'US',
   ): string {
     const currencySymbol = market === 'KR' ? '₩' : '$';
     const marketName = market === 'KR' ? '한국' : '미국';
+    const tradingCash = market === 'KR' ? balances.krwBalance : balances.usdBalance;
 
     const holdingsText =
       holdings.length > 0
@@ -103,7 +104,12 @@ export class AIProviderService {
 
 ## 현재 거래 시장: ${marketName} (${market})
 - 주의: ${marketName} 시장 종목만 거래 가능합니다.
-- 현금: ${currencySymbol}${cash.toLocaleString()}
+
+## 보유 현금 (양쪽 통화)
+- 원화 (KRW): ₩${balances.krwBalance.toLocaleString()}
+- 달러 (USD): $${balances.usdBalance.toLocaleString()}
+- ${marketName} 시장 거래 가능 금액: ${currencySymbol}${tradingCash.toLocaleString()}
+${tradingCash === 0 && (market === 'KR' ? balances.usdBalance > 0 : balances.krwBalance > 0) ? `⚠️ ${marketName} 시장 거래 자금이 없습니다! ${market === 'KR' ? '달러를 원화로' : '원화를 달러로'} 환전하면 거래가 가능합니다.` : ''}
 
 ## 보유 종목 (${marketName} 시장)
 ${holdingsText}
@@ -115,7 +121,8 @@ ${marketText}
 1. 현재 ${marketName} 시장 상황을 분석하세요.
 2. 위 목록에 있는 종목 중에서만 매수/매도를 결정하세요.
 3. 매수, 매도, 또는 관망 중 하나를 결정하세요.
-4. 필요하다면 환전을 결정하세요 (${market === 'US' ? '달러가 부족하면 원화→달러 환전' : '원화가 부족하면 달러→원화 환전'}).
+4. **${marketName} 시장 거래 자금이 부족하면 환전을 먼저 결정하세요!**
+   - ${market === 'KR' ? '원화가 부족하고 달러가 있으면 → USD_TO_KRW 환전' : '달러가 부족하고 원화가 있으면 → KRW_TO_USD 환전'}
 5. 결정 이유를 간략히 설명하세요.
 
 ## 투자 원칙 (중요!)
@@ -135,8 +142,8 @@ ${marketText}
   "scenario": "시나리오 설명 (한국어, 1문장)",
   "exchange": {
     "type": "KRW_TO_USD" | "USD_TO_KRW",
-    "amount": 환전할 금액 (선택, 필요시만),
-    "reason": "환전 이유 (선택, 필요시만)"
+    "amount": 환전할 금액 (원화면 원화금액, 달러면 달러금액),
+    "reason": "환전 이유"
   }
 }
 
@@ -144,7 +151,8 @@ ${marketText}
 - 반드시 위 ${marketName} 시장 종목 목록에서만 선택하세요.
 - 매수 시 현금 잔고를 초과하지 마세요.
 - 매도 시 보유 수량을 초과하지 마세요.
-- 환전은 선택사항입니다. ${market === 'US' ? '달러가 부족하면 원화를 달러로 환전하세요.' : '원화가 부족하면 달러를 원화로 환전하세요.'}
+- **거래 자금이 없으면 반드시 환전을 먼저 하세요!** 환전 후 매수도 가능합니다.
+- 환전 시 amount는 ${market === 'KR' ? '달러 금액 (USD_TO_KRW)' : '원화 금액 (KRW_TO_USD)'}입니다.
 - 무리한 거래보다 HOLD를 선택하는 것이 나을 수 있습니다.
 - 반드시 유효한 JSON만 응답하세요.`;
   }
@@ -381,7 +389,7 @@ ${marketText}
   async requestTradeAnalysis(
     provider: AIProvider,
     holdings: AIHolding[],
-    cash: number,
+    balances: { krwBalance: number; usdBalance: number },
     marketData: MarketDataSnapshot,
     market: 'KR' | 'US',
   ): Promise<TradeDecision | null> {
@@ -397,7 +405,7 @@ ${marketText}
       return null;
     }
 
-    const prompt = this.buildAnalysisPrompt(holdings, cash, marketData, market);
+    const prompt = this.buildAnalysisPrompt(holdings, balances, marketData, market);
 
     try {
       let response: string;

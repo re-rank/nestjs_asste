@@ -459,22 +459,22 @@ export class TradingService {
         const holdings = await this.supabaseService.getHoldings(model.id);
         const marketHoldings = holdings.filter((h) => h.market === market);
 
-        // 잔고 조회
+        // 잔고 조회 (양쪽 통화 모두)
         const balances = await this.supabaseService.getCurrencyBalances(
           model.id,
         );
-        const cash =
+        const tradingCash =
           market === 'KR' ? balances.krwBalance : balances.usdBalance;
 
         this.logger.log(
-          `[${model.name}] 분석 시작 - ${market} 시장, 잔고: ${cash.toLocaleString()}`,
+          `[${model.name}] 분석 시작 - ${market} 시장, 잔고: ${tradingCash.toLocaleString()} (KRW: ${balances.krwBalance.toLocaleString()}, USD: ${balances.usdBalance.toLocaleString()})`,
         );
 
-        // AI 분석 요청 (현재 시장 종목만 분석)
+        // AI 분석 요청 (양쪽 통화 잔고 전달)
         const decision = await this.aiProviderService.requestTradeAnalysis(
           model.provider,
           marketHoldings,
-          cash,
+          balances,
           marketData,
           market,
         );
