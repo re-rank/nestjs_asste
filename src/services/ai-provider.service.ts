@@ -264,7 +264,7 @@ ${marketText}
     if (!apiKey) throw new Error('Google API key not configured');
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
@@ -307,7 +307,7 @@ ${marketText}
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'grok-beta',
+        model: 'grok-3-fast',
         messages: [
           {
             role: 'system',
