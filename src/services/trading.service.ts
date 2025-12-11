@@ -529,19 +529,6 @@ export class TradingService implements OnModuleInit {
       await this.stockPriceService.getExchangeRate();
 
       for (const model of models) {
-        // 오늘 이미 매매했는지 확인
-        const alreadyTraded = await this.supabaseService.hasTradedToday(
-          model.id,
-          market,
-        );
-        if (alreadyTraded) {
-          this.logger.log(
-            `[${model.name}] 오늘 ${market} 시장에서 이미 매매함 - 스킵`,
-          );
-          results.push({ model: model.name, action: 'SKIPPED_ALREADY_TRADED' });
-          continue;
-        }
-
         // 보유 종목 조회
         const holdings = await this.supabaseService.getHoldings(model.id);
         const marketHoldings = holdings.filter((h) => h.market === market);
