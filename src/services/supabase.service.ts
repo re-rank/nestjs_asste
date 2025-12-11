@@ -266,6 +266,50 @@ export class SupabaseService implements OnModuleInit {
     return true;
   }
 
+  /**
+   * 모든 AI 모델의 보유 종목 조회 (시세 업데이트용)
+   */
+  async getAllHoldings(): Promise<
+    Array<{ id: string; ticker: string; market: Market }>
+  > {
+    const { data, error } = await this.supabase
+      .from('ai_portfolios')
+      .select('id, ticker, market');
+
+    if (error) {
+      this.logger.error('Failed to fetch all holdings:', error);
+      return [];
+    }
+
+    return data.map((h) => ({
+      id: h.id,
+      ticker: h.ticker,
+      market: h.market as Market,
+    }));
+  }
+
+  /**
+   * 보유 종목의 현재가만 업데이트
+   */
+  async updateHoldingCurrentPrice(
+    id: string,
+    currentPrice: number,
+  ): Promise<boolean> {
+    const { error } = await this.supabase
+      .from('ai_portfolios')
+      .update({
+        current_price: currentPrice,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id);
+
+    if (error) {
+      this.logger.error('Failed to update holding current price:', error);
+      return false;
+    }
+    return true;
+  }
+
   // ========== Trades ==========
 
   async recordTrade(request: ExecuteTradeRequest): Promise<AITrade | null> {

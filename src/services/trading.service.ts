@@ -531,9 +531,58 @@ export class TradingService {
   }
 
   /**
-   * 포트폴리오 가치 기록
+   * 모든 보유 종목의 현재가를 실시간 시세로 업데이트
+   */
+  async updateAllHoldingsWithCurrentPrices(): Promise<void> {
+    const holdings = await this.supabaseService.getAllHoldings();
+
+    if (holdings.length === 0) {
+      this.logger.log('📈 업데이트할 보유 종목이 없습니다.');
+      return;
+    }
+
+    // 종목별로 그룹화하여 배치 조회
+    const tickers = holdings.map((h) => ({
+      ticker: h.ticker,
+      market: h.market,
+    }));
+
+    // 중복 제거
+    const uniqueTickers = Array.from(
+      new Map(tickers.map((t) => [`${t.ticker}-${t.market}`, t])).values(),
+    );
+
+    // 배치로 시세 조회
+    const quotesMap =
+      await this.stockPriceService.getBatchStockQuotes(uniqueTickers);
+
+    // 각 보유 종목의 현재가 업데이트
+    let updatedCount = 0;
+    for (const holding of holdings) {
+      const quote = quotesMap.get(holding.ticker);
+      if (quote && quote.price > 0) {
+        const success = await this.supabaseService.updateHoldingCurrentPrice(
+          holding.id,
+          quote.price,
+        );
+        if (success) {
+          updatedCount++;
+        }
+      }
+    }
+
+    this.logger.log(
+      `📈 보유 종목 시세 업데이트 완료: ${updatedCount}/${holdings.length}건`,
+    );
+  }
+
+  /**
+   * 포트폴리오 가치 기록 (시세 업데이트 후 기록)
    */
   async recordAllPortfolioValues(): Promise<void> {
+    // 먼저 모든 보유 종목의 시세를 실시간으로 업데이트
+    await this.updateAllHoldingsWithCurrentPrices();
+
     const models = await this.supabaseService.getAIModels();
     const exchangeRate = await this.stockPriceService.getExchangeRate();
 
