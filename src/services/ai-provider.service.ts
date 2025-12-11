@@ -794,8 +794,16 @@ ${marketText}
     for (let iteration = 0; iteration < 5; iteration++) {
       this.logger.log(`🔄 OpenAI iteration ${iteration + 1}/5`);
       
-      // 마지막 iteration에서는 make_trade_decision을 강제로 요청
-      const isLastIteration = iteration === 4;
+      // 3번째 iteration 이후에는 make_trade_decision을 강제로 요청
+      const shouldForceDecision = iteration >= 3;
+      
+      // 3번째 이후에는 결정을 촉구하는 메시지 추가
+      if (shouldForceDecision && messages[messages.length - 1]?.role !== 'system') {
+        messages.push({
+          role: 'user',
+          content: '충분한 정보를 수집했습니다. 이제 make_trade_decision을 호출하여 최종 매매 결정을 내려주세요.',
+        });
+      }
       
       const response = await fetch(
         'https://api.openai.com/v1/chat/completions',
@@ -809,7 +817,7 @@ ${marketText}
             model: 'gpt-4o-mini',
             messages,
             tools: openaiTools,
-            tool_choice: isLastIteration 
+            tool_choice: shouldForceDecision 
               ? { type: 'function', function: { name: 'make_trade_decision' } }
               : 'auto',
             temperature: 0.7,
@@ -916,6 +924,18 @@ ${marketText}
     ];
 
     for (let iteration = 0; iteration < 5; iteration++) {
+      this.logger.log(`🔄 DeepSeek iteration ${iteration + 1}/5`);
+      
+      // 3번째 iteration 이후에는 make_trade_decision을 강제로 요청
+      const shouldForceDecision = iteration >= 3;
+      
+      if (shouldForceDecision && messages[messages.length - 1]?.role !== 'system') {
+        messages.push({
+          role: 'user',
+          content: '충분한 정보를 수집했습니다. 이제 make_trade_decision을 호출하여 최종 매매 결정을 내려주세요.',
+        });
+      }
+      
       const response = await fetch(
         'https://api.deepseek.com/v1/chat/completions',
         {
@@ -928,7 +948,9 @@ ${marketText}
             model: 'deepseek-chat',
             messages,
             tools: openaiTools,
-            tool_choice: 'auto',
+            tool_choice: shouldForceDecision 
+              ? { type: 'function', function: { name: 'make_trade_decision' } }
+              : 'auto',
             temperature: 0.7,
             max_tokens: 1000,
           }),
@@ -1016,6 +1038,18 @@ ${marketText}
     ];
 
     for (let iteration = 0; iteration < 5; iteration++) {
+      this.logger.log(`🔄 xAI iteration ${iteration + 1}/5`);
+      
+      // 3번째 iteration 이후에는 make_trade_decision을 강제로 요청
+      const shouldForceDecision = iteration >= 3;
+      
+      if (shouldForceDecision && messages[messages.length - 1]?.role !== 'system') {
+        messages.push({
+          role: 'user',
+          content: '충분한 정보를 수집했습니다. 이제 make_trade_decision을 호출하여 최종 매매 결정을 내려주세요.',
+        });
+      }
+      
       const response = await fetch('https://api.x.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -1026,7 +1060,9 @@ ${marketText}
           model: 'grok-3-fast',
           messages,
           tools: openaiTools,
-          tool_choice: 'auto',
+          tool_choice: shouldForceDecision 
+            ? { type: 'function', function: { name: 'make_trade_decision' } }
+            : 'auto',
           temperature: 0.7,
           max_tokens: 1000,
         }),
@@ -1101,6 +1137,18 @@ ${marketText}
     }> = [{ role: 'user', content: prompt }];
 
     for (let iteration = 0; iteration < 5; iteration++) {
+      this.logger.log(`🔄 Anthropic iteration ${iteration + 1}/5`);
+      
+      // 3번째 iteration 이후에는 결정을 촉구
+      const shouldForceDecision = iteration >= 3;
+      
+      if (shouldForceDecision && messages[messages.length - 1]?.role !== 'user') {
+        messages.push({
+          role: 'user',
+          content: '충분한 정보를 수집했습니다. 이제 make_trade_decision 도구를 사용하여 최종 매매 결정을 내려주세요.',
+        });
+      }
+      
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -1205,6 +1253,18 @@ ${marketText}
     }> = [{ role: 'user', parts: [{ text: prompt }] }];
 
     for (let iteration = 0; iteration < 5; iteration++) {
+      this.logger.log(`🔄 Google iteration ${iteration + 1}/5`);
+      
+      // 3번째 iteration 이후에는 결정을 촉구
+      const shouldForceDecision = iteration >= 3;
+      
+      if (shouldForceDecision && contents[contents.length - 1]?.role !== 'user') {
+        contents.push({
+          role: 'user',
+          parts: [{ text: '충분한 정보를 수집했습니다. 이제 make_trade_decision 함수를 호출하여 최종 매매 결정을 내려주세요.' }],
+        });
+      }
+      
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
         {
@@ -1243,8 +1303,12 @@ ${marketText}
           parts,
         });
 
-        const functionResponses: Array<{ functionResponse: { name: string; response: unknown } }> =
-          [];
+        const functionResponseParts: Array<{ 
+          functionResponse: { 
+            name: string; 
+            response: Record<string, unknown> 
+          } 
+        }> = [];
 
         for (const part of functionCalls) {
           const fc = part.functionCall;
@@ -1262,10 +1326,15 @@ ${marketText}
             toolArgs as Record<string, unknown>,
           );
 
-          functionResponses.push({
+          // Gemini API는 response가 반드시 객체여야 함
+          const responseObj = typeof result === 'object' && result !== null
+            ? result as Record<string, unknown>
+            : { result };
+
+          functionResponseParts.push({
             functionResponse: {
               name: toolName,
-              response: result,
+              response: responseObj,
             },
           });
         }
@@ -1273,7 +1342,7 @@ ${marketText}
         // Gemini API는 function response를 user role로 전송해야 함
         contents.push({
           role: 'user',
-          parts: functionResponses,
+          parts: functionResponseParts,
         });
       } else {
         // 텍스트만 반환

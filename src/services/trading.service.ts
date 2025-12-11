@@ -553,12 +553,12 @@ export class TradingService implements OnModuleInit {
         );
 
         if (decision === null) {
-          this.logger.log(
-            `[${model.name}] API 키 미설정 또는 오류 - 거래 건너뜀`,
+          this.logger.warn(
+            `[${model.name}] 매매 결정 실패 (API 키 미설정, 네트워크 오류, 또는 AI가 결정을 내리지 못함) - 거래 건너뜀`,
           );
           results.push({
             model: model.name,
-            action: 'SKIPPED_API_ERROR',
+            action: 'SKIPPED_NO_DECISION',
             ticker: '',
           });
           continue;
