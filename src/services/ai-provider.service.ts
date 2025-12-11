@@ -1251,8 +1251,9 @@ ${marketText}
           });
         }
 
+        // Gemini API는 function response를 user role로 전송해야 함
         contents.push({
-          role: 'function',
+          role: 'user',
           parts: functionResponses,
         });
       } else {
