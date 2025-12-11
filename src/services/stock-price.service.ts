@@ -670,4 +670,118 @@ export class StockPriceService {
       { ticker: 'VOO', name: 'Vanguard S&P 500 ETF', exchange: 'NYSE', type: 'ETF' },
     ];
   }
+
+  // ========== AI Tool 지원 메서드 ==========
+
+  /**
+   * 종목 검색 (키워드 기반)
+   * AI Tool: search_stocks
+   */
+  async searchStocks(
+    keyword: string,
+    market: Market,
+    limit: number = 10,
+  ): Promise<Array<{ ticker: string; name: string; exchange: string }>> {
+    const stocks = market === 'KR' ? this.getDefaultKRStocks() : this.getDefaultUSStocks();
+    const lowerKeyword = keyword.toLowerCase();
+
+    const matched = stocks.filter(
+      (s) =>
+        s.ticker.toLowerCase().includes(lowerKeyword) ||
+        s.name.toLowerCase().includes(lowerKeyword),
+    );
+
+    return matched.slice(0, limit).map((s) => ({
+      ticker: s.ticker,
+      name: s.name,
+      exchange: s.exchange,
+    }));
+  }
+
+  /**
+   * 상위 종목 목록 조회 (시가총액 기준 - 기본 목록 순서)
+   * AI Tool: get_top_stocks
+   */
+  async getTopStocks(
+    market: Market,
+    category: string = 'market_cap',
+    limit: number = 20,
+  ): Promise<
+    Array<{
+      ticker: string;
+      name: string;
+      exchange: string;
+      price?: number;
+      changePercent?: number;
+    }>
+  > {
+    const stocks = market === 'KR' ? this.getDefaultKRStocks() : this.getDefaultUSStocks();
+
+    // 상위 종목들의 현재 시세 조회 (병렬)
+    const topStocks = stocks.slice(0, Math.min(limit, stocks.length));
+    const results: Array<{
+      ticker: string;
+      name: string;
+      exchange: string;
+      price?: number;
+      changePercent?: number;
+    }> = [];
+
+    // 배치로 시세 조회
+    const tickers = topStocks.map((s) => ({ ticker: s.ticker, market }));
+    const quotesMap = await this.getBatchStockQuotes(tickers);
+
+    for (const stock of topStocks) {
+      const quote = quotesMap.get(stock.ticker);
+      results.push({
+        ticker: stock.ticker,
+        name: stock.name,
+        exchange: stock.exchange,
+        price: quote?.price,
+        changePercent: quote?.changePercent,
+      });
+    }
+
+    return results;
+  }
+
+  /**
+   * 단일 종목 상세 시세 조회 (AI Tool용)
+   * AI Tool: get_stock_quote
+   */
+  async getStockQuoteForTool(
+    ticker: string,
+    market: Market,
+  ): Promise<{
+    ticker: string;
+    name?: string;
+    price: number;
+    change: number;
+    changePercent: number;
+    high?: number;
+    low?: number;
+    volume?: number;
+    currency: string;
+  } | null> {
+    const quote =
+      market === 'KR'
+        ? await this.getKoreanStockQuote(ticker)
+        : await this.getUSStockQuote(ticker);
+
+    if (!quote || quote.price <= 0) {
+      return null;
+    }
+
+    return {
+      ticker: quote.ticker,
+      name: quote.name || this.getStockName(ticker),
+      price: quote.price,
+      change: quote.change,
+      changePercent: quote.changePercent,
+      high: quote.high,
+      low: quote.low,
+      volume: quote.volume,
+      currency: market === 'KR' ? 'KRW' : 'USD',
+    };
+  }
 }

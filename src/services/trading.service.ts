@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { SupabaseService } from './supabase.service';
 import { AIProviderService } from './ai-provider.service';
 import { StockPriceService } from './stock-price.service';
@@ -15,7 +15,7 @@ import type {
 } from '../types/ai-trading.types';
 
 @Injectable()
-export class TradingService {
+export class TradingService implements OnModuleInit {
   private readonly logger = new Logger(TradingService.name);
 
   constructor(
@@ -24,6 +24,64 @@ export class TradingService {
     private stockPriceService: StockPriceService,
     private notificationService: NotificationService,
   ) {}
+
+  /**
+   * 모듈 초기화 시 AI Tool 핸들러 등록
+   */
+  onModuleInit() {
+    this.registerToolHandlers();
+    this.logger.log('🔧 AI Tool handlers registered');
+  }
+
+  /**
+   * AI Tool 핸들러 등록
+   */
+  private registerToolHandlers(): void {
+    // search_stocks: 키워드로 종목 검색
+    this.aiProviderService.registerToolHandler(
+      'search_stocks',
+      async (args: Record<string, unknown>) => {
+        const keyword = args.keyword as string;
+        const market = args.market as Market;
+        const limit = (args.limit as number) || 10;
+
+        this.logger.log(`🔍 Tool: search_stocks("${keyword}", ${market})`);
+        return await this.stockPriceService.searchStocks(keyword, market, limit);
+      },
+    );
+
+    // get_stock_quote: 특정 종목 시세 조회
+    this.aiProviderService.registerToolHandler(
+      'get_stock_quote',
+      async (args: Record<string, unknown>) => {
+        const ticker = args.ticker as string;
+        const market = args.market as Market;
+
+        this.logger.log(`📈 Tool: get_stock_quote("${ticker}", ${market})`);
+        const quote = await this.stockPriceService.getStockQuoteForTool(
+          ticker,
+          market,
+        );
+        if (!quote) {
+          return { error: `Failed to get quote for ${ticker}` };
+        }
+        return quote;
+      },
+    );
+
+    // get_top_stocks: 상위 종목 목록 조회
+    this.aiProviderService.registerToolHandler(
+      'get_top_stocks',
+      async (args: Record<string, unknown>) => {
+        const market = args.market as Market;
+        const category = (args.category as string) || 'market_cap';
+        const limit = (args.limit as number) || 20;
+
+        this.logger.log(`📊 Tool: get_top_stocks(${market}, ${category}, ${limit})`);
+        return await this.stockPriceService.getTopStocks(market, category, limit);
+      },
+    );
+  }
 
   /**
    * 시장 데이터 스냅샷 생성
@@ -450,9 +508,10 @@ export class TradingService {
 
   /**
    * 특정 시장에 대해 모든 AI 모델의 매매 분석 및 실행
+   * Tool Calling 방식으로 AI가 직접 종목을 검색하고 시세를 조회
    */
   async runMarketTradingRound(market: Market): Promise<TradingRoundResult> {
-    this.logger.log(`\n=== ${market} 시장 트레이딩 라운드 시작 ===`);
+    this.logger.log(`\n=== ${market} 시장 트레이딩 라운드 시작 (Tool-based) ===`);
 
     const results: Array<{ model: string; action: string; ticker?: string }> =
       [];
@@ -466,7 +525,7 @@ export class TradingService {
         return { success: false, tradesExecuted: 0, results };
       }
 
-      const marketData = await this.getMarketSnapshot();
+      // 환율만 미리 조회 (캐시용)
       await this.stockPriceService.getExchangeRate();
 
       for (const model of models) {
@@ -495,15 +554,14 @@ export class TradingService {
           market === 'KR' ? balances.krwBalance : balances.usdBalance;
 
         this.logger.log(
-          `[${model.name}] 분석 시작 - ${market} 시장, 잔고: ${tradingCash.toLocaleString()} (KRW: ${balances.krwBalance.toLocaleString()}, USD: ${balances.usdBalance.toLocaleString()})`,
+          `[${model.name}] Tool 기반 분석 시작 - ${market} 시장, 잔고: ${tradingCash.toLocaleString()} (KRW: ${balances.krwBalance.toLocaleString()}, USD: ${balances.usdBalance.toLocaleString()})`,
         );
 
-        // AI 분석 요청 (양쪽 통화 잔고 전달)
-        const decision = await this.aiProviderService.requestTradeAnalysis(
+        // AI Tool 기반 분석 요청 (전체 시장 데이터 없이)
+        const decision = await this.aiProviderService.requestTradeAnalysisWithTools(
           model.provider,
           marketHoldings,
           balances,
-          marketData,
           market,
         );
 
