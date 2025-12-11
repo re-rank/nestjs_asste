@@ -792,6 +792,11 @@ ${marketText}
     ];
 
     for (let iteration = 0; iteration < 5; iteration++) {
+      this.logger.log(`🔄 OpenAI iteration ${iteration + 1}/5`);
+      
+      // 마지막 iteration에서는 make_trade_decision을 강제로 요청
+      const isLastIteration = iteration === 4;
+      
       const response = await fetch(
         'https://api.openai.com/v1/chat/completions',
         {
@@ -804,7 +809,9 @@ ${marketText}
             model: 'gpt-4o-mini',
             messages,
             tools: openaiTools,
-            tool_choice: 'auto',
+            tool_choice: isLastIteration 
+              ? { type: 'function', function: { name: 'make_trade_decision' } }
+              : 'auto',
             temperature: 0.7,
             max_tokens: 1000,
           }),
@@ -819,10 +826,15 @@ ${marketText}
       const data = await response.json();
       const assistantMessage = data.choices[0]?.message;
 
-      if (!assistantMessage) break;
+      if (!assistantMessage) {
+        this.logger.warn('OpenAI: No assistant message in response');
+        break;
+      }
 
       // Tool 호출이 있는 경우
       if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+        this.logger.log(`📞 OpenAI: ${assistantMessage.tool_calls.length} tool(s) called`);
+        
         messages.push({
           role: 'assistant',
           content: assistantMessage.content || '',
@@ -837,6 +849,7 @@ ${marketText}
 
           // make_trade_decision이면 바로 결과 반환
           if (toolName === 'make_trade_decision') {
+            this.logger.log('✅ OpenAI: Trade decision received');
             return this.parseToolDecision(toolArgs);
           }
 
@@ -851,10 +864,16 @@ ${marketText}
         }
       } else {
         // Tool 호출 없이 종료 - 텍스트에서 결정 파싱 시도
+        this.logger.warn('OpenAI: No tool calls, attempting to parse text response');
         if (assistantMessage.content) {
+          this.logger.log(`📄 Content: ${assistantMessage.content.substring(0, 200)}...`);
           const decision = this.parseAIResponse(assistantMessage.content);
-          if (decision) return decision;
+          if (decision) {
+            this.logger.log('✅ OpenAI: Decision parsed from text');
+            return decision;
+          }
         }
+        this.logger.error('OpenAI: No JSON found in response');
         break;
       }
     }
