@@ -62,24 +62,33 @@ export class TradingSchedulerService implements OnModuleInit {
     const kstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
     const kstHours = kstTime.getUTCHours();
     const kstMinutes = kstTime.getUTCMinutes();
-    const dayOfWeek = kstTime.getUTCDay();
-
-    // 주말이면 닫힘
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return false;
-    }
+    const kstDayOfWeek = kstTime.getUTCDay();
 
     const currentTime = kstHours * 60 + kstMinutes;
 
     if (market === 'KR') {
+      // 국내증시: KST 기준 주말 체크
+      if (kstDayOfWeek === 0 || kstDayOfWeek === 6) {
+        return false;
+      }
       // 국내증시: 9:00 ~ 15:00 KST
       const openTime = 9 * 60;
       const closeTime = 15 * 60;
       return currentTime >= openTime && currentTime < closeTime;
     } else {
-      // 미국증시: 23:30 ~ 06:00 KST (또는 서머타임 시 22:30 ~ 05:00)
+      // 미국증시: EST/EDT 기준으로 요일 체크
       const isDST = this.isUSDaylightSavingTime();
+      // UTC를 미국 동부시간으로 변환 (EST: UTC-5, EDT: UTC-4)
+      const estOffset = isDST ? -4 : -5;
+      const estTime = new Date(now.getTime() + estOffset * 60 * 60 * 1000);
+      const estDayOfWeek = estTime.getUTCDay();
 
+      // 미국 시간 기준 주말이면 닫힘
+      if (estDayOfWeek === 0 || estDayOfWeek === 6) {
+        return false;
+      }
+
+      // 미국증시: 23:30 ~ 06:00 KST (또는 서머타임 시 22:30 ~ 05:00)
       if (isDST) {
         // 서머타임: 22:30 ~ 05:00
         const openTime = 22 * 60 + 30;
