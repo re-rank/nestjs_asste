@@ -17,6 +17,8 @@ async function bootstrap() {
     'http://localhost:3000',
     'https://asset-management-re-rank.vercel.app',
     'https://asset-management-git-main-re-rank.vercel.app',
+    'https://minck.im',
+    'https://www.minck.im',
     /\.vercel\.app$/,  // 모든 Vercel 도메인 허용
   ];
 
