@@ -545,11 +545,13 @@ export class TradingService implements OnModuleInit {
         );
 
         // AI Tool 기반 분석 요청 (전체 시장 데이터 없이)
+        // model.name을 전달하여 모델별로 다른 API 모델 ID 사용 (예: grok-4-1-fast-reasoning, gemini-3-pro-preview)
         const decision = await this.aiProviderService.requestTradeAnalysisWithTools(
           model.provider,
           marketHoldings,
           balances,
           market,
+          model.name,
         );
 
         if (decision === null) {

@@ -28,6 +28,22 @@ interface ToolCall {
 // Tool 실행 핸들러 타입
 export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
+// 모델 이름에서 실제 API 모델 ID 매핑
+const MODEL_ID_MAP: Record<string, { provider: AIProvider; modelId: string }> = {
+  // xAI Grok 모델들
+  'grok-3-fast': { provider: 'xai', modelId: 'grok-3-fast' },
+  'grok-4-1-fast-reasoning': { provider: 'xai', modelId: 'grok-4-1-fast-reasoning' },
+  // Google Gemini 모델들
+  'gemini-2.0-flash': { provider: 'google', modelId: 'gemini-2.0-flash' },
+  'gemini-3-pro-preview': { provider: 'google', modelId: 'gemini-3-pro-preview' },
+  // OpenAI 모델들
+  'gpt-4o-mini': { provider: 'openai', modelId: 'gpt-4o-mini' },
+  // Anthropic 모델들
+  'claude-3-haiku': { provider: 'anthropic', modelId: 'claude-3-haiku-20240307' },
+  // DeepSeek 모델들
+  'deepseek-chat': { provider: 'deepseek', modelId: 'deepseek-chat' },
+};
+
 @Injectable()
 export class AIProviderService {
   private readonly logger = new Logger(AIProviderService.name);
@@ -36,6 +52,24 @@ export class AIProviderService {
   private toolHandlers: Map<string, ToolHandler> = new Map();
 
   constructor(private configService: ConfigService) {}
+
+  /**
+   * AI 모델 이름에서 실제 모델 ID 가져오기
+   */
+  getModelId(modelName: string): string {
+    const mapping = MODEL_ID_MAP[modelName];
+    if (mapping) return mapping.modelId;
+
+    // 매핑이 없으면 provider 기본값 사용
+    const lowerName = modelName.toLowerCase();
+    if (lowerName.includes('grok')) return 'grok-3-fast';
+    if (lowerName.includes('gemini')) return 'gemini-2.0-flash';
+    if (lowerName.includes('gpt')) return 'gpt-4o-mini';
+    if (lowerName.includes('claude')) return 'claude-3-haiku-20240307';
+    if (lowerName.includes('deepseek')) return 'deepseek-chat';
+
+    return modelName;
+  }
 
   /**
    * Tool 핸들러 등록
@@ -493,12 +527,12 @@ ${marketText}
   /**
    * Google Gemini API 호출
    */
-  private async callGoogle(prompt: string): Promise<string> {
+  private async callGoogle(prompt: string, modelId: string = 'gemini-2.0-flash'): Promise<string> {
     const apiKey = this.getAPIKey('google');
     if (!apiKey) throw new Error('Google API key not configured');
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
@@ -530,7 +564,7 @@ ${marketText}
   /**
    * xAI Grok API 호출
    */
-  private async callXAI(prompt: string): Promise<string> {
+  private async callXAI(prompt: string, modelId: string = 'grok-3-fast'): Promise<string> {
     const apiKey = this.getAPIKey('xai');
     if (!apiKey) throw new Error('xAI API key not configured');
 
@@ -541,7 +575,7 @@ ${marketText}
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'grok-3-fast',
+        model: modelId,
         messages: [
           {
             role: 'system',
@@ -611,6 +645,7 @@ ${marketText}
   /**
    * AI 매매 판단 요청
    * @param market 현재 거래 가능한 시장 (KR 또는 US)
+   * @param modelName AI 모델 이름 (예: grok-4-1-fast-reasoning, gemini-3-pro-preview)
    */
   async requestTradeAnalysis(
     provider: AIProvider,
@@ -618,6 +653,7 @@ ${marketText}
     balances: { krwBalance: number; usdBalance: number },
     marketData: MarketDataSnapshot,
     market: 'KR' | 'US',
+    modelName?: string,
   ): Promise<TradeDecision | null> {
     const keyStatus = this.getAPIKeyStatus(provider);
 
@@ -632,6 +668,7 @@ ${marketText}
     }
 
     const prompt = this.buildAnalysisPrompt(holdings, balances, marketData, market);
+    const modelId = modelName ? this.getModelId(modelName) : undefined;
 
     try {
       let response: string;
@@ -647,10 +684,10 @@ ${marketText}
           response = await this.callDeepSeek(prompt);
           break;
         case 'google':
-          response = await this.callGoogle(prompt);
+          response = await this.callGoogle(prompt, modelId);
           break;
         case 'xai':
-          response = await this.callXAI(prompt);
+          response = await this.callXAI(prompt, modelId);
           break;
         default:
           this.logger.warn(`${provider}: Unsupported AI provider.`);
@@ -678,12 +715,14 @@ ${marketText}
   /**
    * Tool Calling 기반 AI 매매 판단 요청 (신규)
    * AI가 직접 종목을 검색하고 시세를 조회하여 결정
+   * @param modelName AI 모델 이름 (예: grok-4-1-fast-reasoning, gemini-3-pro-preview)
    */
   async requestTradeAnalysisWithTools(
     provider: AIProvider,
     holdings: AIHolding[],
     balances: { krwBalance: number; usdBalance: number },
     market: Market,
+    modelName?: string,
   ): Promise<TradeDecision | null> {
     const keyStatus = this.getAPIKeyStatus(provider);
 
@@ -699,6 +738,7 @@ ${marketText}
 
     const prompt = this.buildToolBasedPrompt(holdings, balances, market);
     const tools = this.getToolDefinitions();
+    const modelId = modelName ? this.getModelId(modelName) : undefined;
 
     try {
       let decision: TradeDecision | null = null;
@@ -711,13 +751,13 @@ ${marketText}
           decision = await this.callDeepSeekWithTools(prompt, tools);
           break;
         case 'xai':
-          decision = await this.callXAIWithTools(prompt, tools);
+          decision = await this.callXAIWithTools(prompt, tools, modelId);
           break;
         case 'anthropic':
           decision = await this.callAnthropicWithTools(prompt, tools);
           break;
         case 'google':
-          decision = await this.callGoogleWithTools(prompt, tools);
+          decision = await this.callGoogleWithTools(prompt, tools, modelId);
           break;
         default:
           this.logger.warn(`${provider}: Tool calling not supported.`);
@@ -1010,6 +1050,7 @@ ${marketText}
   private async callXAIWithTools(
     prompt: string,
     tools: ToolDefinition[],
+    modelId: string = 'grok-3-fast',
   ): Promise<TradeDecision | null> {
     const apiKey = this.getAPIKey('xai');
     if (!apiKey) throw new Error('xAI API key not configured');
@@ -1039,17 +1080,17 @@ ${marketText}
 
     for (let iteration = 0; iteration < 5; iteration++) {
       this.logger.log(`🔄 xAI iteration ${iteration + 1}/5`);
-      
+
       // 3번째 iteration 이후에는 make_trade_decision을 강제로 요청
       const shouldForceDecision = iteration >= 3;
-      
+
       if (shouldForceDecision && messages[messages.length - 1]?.role !== 'system') {
         messages.push({
           role: 'user',
           content: '충분한 정보를 수집했습니다. 이제 make_trade_decision을 호출하여 최종 매매 결정을 내려주세요.',
         });
       }
-      
+
       const response = await fetch('https://api.x.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -1057,7 +1098,7 @@ ${marketText}
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'grok-3-fast',
+          model: modelId,
           messages,
           tools: openaiTools,
           tool_choice: shouldForceDecision 
@@ -1233,6 +1274,7 @@ ${marketText}
   private async callGoogleWithTools(
     prompt: string,
     tools: ToolDefinition[],
+    modelId: string = 'gemini-2.0-flash',
   ): Promise<TradeDecision | null> {
     const apiKey = this.getAPIKey('google');
     if (!apiKey) throw new Error('Google API key not configured');
@@ -1254,19 +1296,19 @@ ${marketText}
 
     for (let iteration = 0; iteration < 5; iteration++) {
       this.logger.log(`🔄 Google iteration ${iteration + 1}/5`);
-      
+
       // 3번째 iteration 이후에는 결정을 촉구
       const shouldForceDecision = iteration >= 3;
-      
+
       if (shouldForceDecision && contents[contents.length - 1]?.role !== 'user') {
         contents.push({
           role: 'user',
           parts: [{ text: '충분한 정보를 수집했습니다. 이제 make_trade_decision 함수를 호출하여 최종 매매 결정을 내려주세요.' }],
         });
       }
-      
+
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
