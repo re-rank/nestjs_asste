@@ -20,8 +20,44 @@ import type {
 export class SupabaseService implements OnModuleInit {
   private readonly logger = new Logger(SupabaseService.name);
   private supabase: SupabaseClient;
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY_MS = 1000;
 
   constructor(private configService: ConfigService) {}
+
+  /**
+   * 재시도 로직을 포함한 함수 실행
+   */
+  private async withRetry<T>(
+    operation: () => Promise<T>,
+    operationName: string,
+  ): Promise<T> {
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error as Error;
+        const isNetworkError = 
+          error instanceof Error && 
+          (error.message.includes('fetch failed') || 
+           error.message.includes('ECONNRESET') ||
+           error.message.includes('ETIMEDOUT'));
+        
+        if (isNetworkError && attempt < this.MAX_RETRIES) {
+          this.logger.warn(
+            `${operationName}: 네트워크 오류, ${attempt}/${this.MAX_RETRIES} 재시도 중...`,
+          );
+          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY_MS * attempt));
+        } else {
+          throw error;
+        }
+      }
+    }
+    
+    throw lastError;
+  }
 
   onModuleInit() {
     // Cloudtype 환경 변수 직접 접근 (ConfigService보다 우선)
@@ -48,18 +84,23 @@ export class SupabaseService implements OnModuleInit {
   // ========== AI Models ==========
 
   async getAIModels(): Promise<AIModel[]> {
-    const { data, error } = await this.supabase
-      .from('ai_models')
-      .select('*')
-      .eq('is_active', true)
-      .order('created_at', { ascending: true });
+    return this.withRetry(async () => {
+      const { data, error } = await this.supabase
+        .from('ai_models')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: true });
 
-    if (error) {
-      this.logger.error('Failed to fetch AI models:', error);
-      return [];
-    }
+      if (error) {
+        if (error.message?.includes('fetch failed') || error.message?.includes('ECONNRESET')) {
+          throw new Error(error.message);
+        }
+        this.logger.error('Failed to fetch AI models:', error);
+        return [];
+      }
 
-    return (data as DBModel[]).map(this.toAIModel);
+      return (data as DBModel[]).map(this.toAIModel);
+    }, 'getAIModels');
   }
 
   private toAIModel(db: DBModel): AIModel {
@@ -77,22 +118,27 @@ export class SupabaseService implements OnModuleInit {
   // ========== Cash Balances ==========
 
   async getCurrencyBalances(modelId: string): Promise<CurrencyBalances> {
-    const { data, error } = await this.supabase
-      .from('ai_cash_balances')
-      .select('krw_balance, usd_balance')
-      .eq('model_id', modelId)
-      .single();
+    return this.withRetry(async () => {
+      const { data, error } = await this.supabase
+        .from('ai_cash_balances')
+        .select('krw_balance, usd_balance')
+        .eq('model_id', modelId)
+        .single();
 
-    if (error) {
-      this.logger.error('Failed to fetch currency balances:', error);
-      return { krwBalance: 0, usdBalance: 0 };
-    }
+      if (error) {
+        if (error.message?.includes('fetch failed') || error.message?.includes('ECONNRESET')) {
+          throw new Error(error.message);
+        }
+        this.logger.error('Failed to fetch currency balances:', error);
+        return { krwBalance: 0, usdBalance: 0 };
+      }
 
-    const row = data as DBCashBalance;
-    return {
-      krwBalance: Number(row.krw_balance),
-      usdBalance: Number(row.usd_balance),
-    };
+      const row = data as DBCashBalance;
+      return {
+        krwBalance: Number(row.krw_balance),
+        usdBalance: Number(row.usd_balance),
+      };
+    }, 'getCurrencyBalances');
   }
 
   async updateCashBalance(
@@ -145,18 +191,24 @@ export class SupabaseService implements OnModuleInit {
   // ========== Holdings ==========
 
   async getHoldings(modelId: string): Promise<AIHolding[]> {
-    const { data, error } = await this.supabase
-      .from('ai_portfolios')
-      .select('*')
-      .eq('model_id', modelId)
-      .order('updated_at', { ascending: false });
+    return this.withRetry(async () => {
+      const { data, error } = await this.supabase
+        .from('ai_portfolios')
+        .select('*')
+        .eq('model_id', modelId)
+        .order('updated_at', { ascending: false });
 
-    if (error) {
-      this.logger.error('Failed to fetch holdings:', error);
-      return [];
-    }
+      if (error) {
+        // 네트워크 오류인 경우 throw하여 재시도 유도
+        if (error.message?.includes('fetch failed') || error.message?.includes('ECONNRESET')) {
+          throw new Error(error.message);
+        }
+        this.logger.error('Failed to fetch holdings:', error);
+        return [];
+      }
 
-    return (data as DBPortfolio[]).map(this.toAIHolding);
+      return (data as DBPortfolio[]).map(this.toAIHolding);
+    }, 'getHoldings');
   }
 
   private toAIHolding(db: DBPortfolio): AIHolding {
@@ -272,20 +324,25 @@ export class SupabaseService implements OnModuleInit {
   async getAllHoldings(): Promise<
     Array<{ id: string; ticker: string; market: Market }>
   > {
-    const { data, error } = await this.supabase
-      .from('ai_portfolios')
-      .select('id, ticker, market');
+    return this.withRetry(async () => {
+      const { data, error } = await this.supabase
+        .from('ai_portfolios')
+        .select('id, ticker, market');
 
-    if (error) {
-      this.logger.error('Failed to fetch all holdings:', error);
-      return [];
-    }
+      if (error) {
+        if (error.message?.includes('fetch failed') || error.message?.includes('ECONNRESET')) {
+          throw new Error(error.message);
+        }
+        this.logger.error('Failed to fetch all holdings:', error);
+        return [];
+      }
 
-    return data.map((h) => ({
-      id: h.id,
-      ticker: h.ticker,
-      market: h.market as Market,
-    }));
+      return data.map((h) => ({
+        id: h.id,
+        ticker: h.ticker,
+        market: h.market as Market,
+      }));
+    }, 'getAllHoldings');
   }
 
   /**
