@@ -555,12 +555,13 @@ export class TradingService implements OnModuleInit {
         );
 
         if (decision === null) {
+          // API 키가 없는 경우에만 null 반환됨
           this.logger.warn(
-            `[${model.name}] 매매 결정 실패 (API 키 미설정, 네트워크 오류, 또는 AI가 결정을 내리지 못함) - 거래 건너뜀`,
+            `[${model.name}] API 키 미설정 또는 미지원 프로바이더 - 거래 건너뜀`,
           );
           results.push({
             model: model.name,
-            action: 'SKIPPED_NO_DECISION',
+            action: 'SKIPPED_NO_API_KEY',
             ticker: '',
           });
           continue;

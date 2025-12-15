@@ -771,11 +771,26 @@ ${marketText}
         return decision;
       }
 
-      return null;
+      // AI가 결정을 내리지 못한 경우 기본 HOLD 반환
+      this.logger.warn(`${provider}: AI가 결정을 내리지 못함 - 기본 HOLD 처리`);
+      return this.createDefaultHoldDecision('AI가 명확한 결정을 내리지 못하여 현재 포지션 유지');
     } catch (error) {
       this.logger.error(`${provider} Tool API error:`, error);
-      return null;
+      // 오류 발생 시에도 기본 HOLD 반환
+      return this.createDefaultHoldDecision(`API 오류로 인한 안전한 HOLD 처리: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * 기본 HOLD 결정 생성
+   */
+  private createDefaultHoldDecision(reasoning: string): TradeDecision {
+    return {
+      action: 'HOLD',
+      reasoning,
+      confidence: 50,
+      scenario: '결정 실패로 인한 자동 HOLD',
+    };
   }
 
   /**
