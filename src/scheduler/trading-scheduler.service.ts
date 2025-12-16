@@ -209,6 +209,10 @@ export class TradingSchedulerService implements OnModuleInit {
   ): Promise<{ success: boolean; tradesExecuted: number }> {
     this.logger.log(`🔧 Manual trading trigger: ${market}`);
     const result = await this.tradingService.runMarketTradingRound(market);
+
+    // 수동 트리거 후에도 포트폴리오 가치 기록
+    await this.recordPortfolioValuesWithRetry();
+
     return {
       success: result.success,
       tradesExecuted: result.tradesExecuted,
