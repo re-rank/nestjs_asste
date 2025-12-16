@@ -7,6 +7,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { TradingSchedulerService } from '../scheduler/trading-scheduler.service';
+import { TradingService } from '../services/trading.service';
 import { AIProviderService } from '../services/ai-provider.service';
 import { SupabaseService } from '../services/supabase.service';
 import type { Market, AIProvider } from '../types/ai-trading.types';
@@ -17,6 +18,7 @@ export class TradingController {
 
   constructor(
     private tradingSchedulerService: TradingSchedulerService,
+    private tradingService: TradingService,
     private aiProviderService: AIProviderService,
     private supabaseService: SupabaseService,
   ) {}
@@ -76,6 +78,26 @@ export class TradingController {
   }
 
   /**
+   * 수동 포트폴리오 가치 기록 트리거 (테스트/디버깅용)
+   */
+  @Post('api/record-portfolio')
+  async triggerPortfolioRecord() {
+    try {
+      await this.tradingService.recordAllPortfolioValues();
+      return {
+        success: true,
+        message: 'Portfolio values recorded successfully',
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      throw new HttpException(
+        `Portfolio record failed: ${error}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
    * 서버 정보 조회
    */
   @Get('api/info')
@@ -93,7 +115,7 @@ export class TradingController {
       daylightSavingTime: isDST,
       schedules: {
         trading: 'every 30 minutes',
-        portfolioRecord: 'every hour',
+        portfolioRecord: 'every 30 minutes (after trading)',
       },
       markets: {
         KR: {
