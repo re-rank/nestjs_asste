@@ -173,19 +173,32 @@ export class TradingSchedulerService implements OnModuleInit {
     } else {
       this.logger.log('🇺🇸 US market is CLOSED');
     }
+
+    // 트레이딩 완료 후 포트폴리오 가치 기록 (항상 실행)
+    await this.recordPortfolioValuesWithRetry();
   }
 
   /**
-   * 30분마다 포트폴리오 가치 기록
+   * 포트폴리오 가치 기록 (재시도 로직 포함)
    */
-  @Cron(CronExpression.EVERY_30_MINUTES)
-  async handlePortfolioRecord() {
+  private async recordPortfolioValuesWithRetry(retries = 2): Promise<void> {
     this.logger.log('📊 Recording portfolio values...');
-    try {
-      await this.tradingService.recordAllPortfolioValues();
-    } catch (error) {
-      this.logger.error('Portfolio record error:', error);
+
+    for (let attempt = 1; attempt <= retries + 1; attempt++) {
+      try {
+        await this.tradingService.recordAllPortfolioValues();
+        this.logger.log('✅ Portfolio values recorded successfully');
+        return;
+      } catch (error) {
+        this.logger.error(`Portfolio record error (attempt ${attempt}/${retries + 1}):`, error);
+        if (attempt <= retries) {
+          this.logger.log(`⏳ Retrying in 5 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      }
     }
+
+    this.logger.error('❌ Failed to record portfolio values after all retries');
   }
 
   /**

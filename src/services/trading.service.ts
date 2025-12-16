@@ -656,27 +656,47 @@ export class TradingService implements OnModuleInit {
    * 포트폴리오 가치 기록 (시세 업데이트 후 기록)
    */
   async recordAllPortfolioValues(): Promise<void> {
+    this.logger.log('📊 포트폴리오 가치 기록 시작...');
+
     // 먼저 모든 보유 종목의 시세를 실시간으로 업데이트
     await this.updateAllHoldingsWithCurrentPrices();
 
     const models = await this.supabaseService.getAIModels();
     const exchangeRate = await this.stockPriceService.getExchangeRate();
 
+    this.logger.log(`📊 ${models.length}개 모델의 포트폴리오 가치 기록 중... (환율: ₩${exchangeRate.toLocaleString()})`);
+
+    let recordedCount = 0;
     for (const model of models) {
-      const holdings = await this.supabaseService.getHoldings(model.id);
-      const balances = await this.supabaseService.getCurrencyBalances(model.id);
+      try {
+        const holdings = await this.supabaseService.getHoldings(model.id);
+        const balances = await this.supabaseService.getCurrencyBalances(model.id);
 
-      const cash =
-        balances.krwBalance + balances.usdBalance * exchangeRate;
-      const holdingsValue = holdings.reduce(
-        (sum, h) => sum + (h.totalValue || 0),
-        0,
-      );
-      const totalValue = cash + holdingsValue;
+        const cash = balances.krwBalance + balances.usdBalance * exchangeRate;
 
-      await this.supabaseService.recordPortfolioValue(model.id, totalValue);
+        // USD 주식은 환율 적용하여 원화로 환산
+        const holdingsValue = holdings.reduce((sum, h) => {
+          const value = h.totalValue || 0;
+          // USD 시장 주식은 환율 적용
+          if (h.market === 'US') {
+            return sum + value * exchangeRate;
+          }
+          return sum + value;
+        }, 0);
+
+        const totalValue = cash + holdingsValue;
+
+        await this.supabaseService.recordPortfolioValue(model.id, totalValue);
+        recordedCount++;
+
+        this.logger.debug(
+          `  ✓ ${model.name}: ₩${totalValue.toLocaleString()} (현금: ₩${cash.toLocaleString()}, 주식: ₩${holdingsValue.toLocaleString()})`,
+        );
+      } catch (error) {
+        this.logger.error(`  ✗ ${model.name} 기록 실패:`, error);
+      }
     }
 
-    this.logger.log('📊 포트폴리오 가치 기록 완료');
+    this.logger.log(`📊 포트폴리오 가치 기록 완료: ${recordedCount}/${models.length}개 모델`);
   }
 }

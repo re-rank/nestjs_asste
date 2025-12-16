@@ -484,15 +484,18 @@ export class SupabaseService implements OnModuleInit {
   async recordPortfolioValue(
     modelId: string,
     totalValue: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { error } = await this.supabase.from('ai_portfolio_history').insert({
       model_id: modelId,
       total_value: totalValue,
     });
 
     if (error) {
-      this.logger.error('Failed to record portfolio value:', error);
+      this.logger.error(`Failed to record portfolio value for ${modelId}:`, error);
+      return false;
     }
+
+    return true;
   }
 
   async getPortfolioHistory(
