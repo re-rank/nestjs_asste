@@ -200,6 +200,45 @@ export class TradingController {
     return 'valid';
   }
 
+  /**
+   * 포트폴리오 히스토리 조회 (차트용)
+   */
+  @Get('api/portfolio-history')
+  async getPortfolioHistory() {
+    const history = await this.supabaseService.getPortfolioHistory(30);
+    const models = await this.supabaseService.getAIModels();
+
+    // 모델 ID -> 이름 매핑
+    const modelMap = new Map(models.map((m) => [m.id, m.name]));
+
+    // 날짜별로 그룹화
+    const groupedByDate = new Map<string, Record<string, number>>();
+
+    for (const record of history) {
+      const date = record.recordedAt.split('T')[0];
+      if (!groupedByDate.has(date)) {
+        groupedByDate.set(date, {});
+      }
+      const dateRecord = groupedByDate.get(date)!;
+      const modelName = modelMap.get(record.modelId) || record.modelId;
+      // 같은 날짜에 여러 기록이 있으면 마지막 값 사용
+      dateRecord[modelName] = record.totalValue;
+    }
+
+    // 배열로 변환
+    const chartData = Array.from(groupedByDate.entries()).map(([date, values]) => ({
+      date,
+      ...values,
+    }));
+
+    return {
+      success: true,
+      count: chartData.length,
+      latestDate: chartData.length > 0 ? chartData[chartData.length - 1].date : null,
+      data: chartData,
+    };
+  }
+
   private isDaylightSavingTime(): boolean {
     const now = new Date();
     const year = now.getFullYear();

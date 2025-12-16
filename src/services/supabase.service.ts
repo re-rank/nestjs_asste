@@ -485,16 +485,22 @@ export class SupabaseService implements OnModuleInit {
     modelId: string,
     totalValue: number,
   ): Promise<boolean> {
-    const { error } = await this.supabase.from('ai_portfolio_history').insert({
+    if (!this.supabase) {
+      this.logger.error('Supabase client not initialized - cannot record portfolio value');
+      return false;
+    }
+
+    const { data, error } = await this.supabase.from('ai_portfolio_history').insert({
       model_id: modelId,
       total_value: totalValue,
-    });
+    }).select('id, recorded_at');
 
     if (error) {
       this.logger.error(`Failed to record portfolio value for ${modelId}:`, error);
       return false;
     }
 
+    this.logger.debug(`📊 Portfolio recorded: ${modelId} = ₩${totalValue.toLocaleString()} at ${data?.[0]?.recorded_at}`);
     return true;
   }
 

@@ -686,12 +686,15 @@ export class TradingService implements OnModuleInit {
 
         const totalValue = cash + holdingsValue;
 
-        await this.supabaseService.recordPortfolioValue(model.id, totalValue);
-        recordedCount++;
-
-        this.logger.debug(
-          `  ✓ ${model.name}: ₩${totalValue.toLocaleString()} (현금: ₩${cash.toLocaleString()}, 주식: ₩${holdingsValue.toLocaleString()})`,
-        );
+        const success = await this.supabaseService.recordPortfolioValue(model.id, totalValue);
+        if (success) {
+          recordedCount++;
+          this.logger.debug(
+            `  ✓ ${model.name}: ₩${totalValue.toLocaleString()} (현금: ₩${cash.toLocaleString()}, 주식: ₩${holdingsValue.toLocaleString()})`,
+          );
+        } else {
+          this.logger.warn(`  ⚠️ ${model.name} 기록 실패 (Supabase 오류)`);
+        }
       } catch (error) {
         this.logger.error(`  ✗ ${model.name} 기록 실패:`, error);
       }
