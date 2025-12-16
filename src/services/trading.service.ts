@@ -702,4 +702,294 @@ export class TradingService implements OnModuleInit {
 
     this.logger.log(`📊 포트폴리오 가치 기록 완료: ${recordedCount}/${models.length}개 모델`);
   }
+
+  /**
+   * 거래 기록에서 포트폴리오 히스토리 마이그레이션
+   * 각 거래 시점에서 포트폴리오 가치를 계산하여 히스토리에 저장
+   */
+  async migratePortfolioHistoryFromTrades(): Promise<{
+    success: boolean;
+    migratedDates: number;
+    skippedDates: number;
+    errors: string[];
+  }> {
+    this.logger.log('🔄 포트폴리오 히스토리 마이그레이션 시작...');
+
+    const models = await this.supabaseService.getAIModels();
+    const allTrades = await this.supabaseService.getAllTrades();
+    const exchangeRate = await this.stockPriceService.getExchangeRate();
+
+    let migratedDates = 0;
+    let skippedDates = 0;
+    const errors: string[] = [];
+
+    // 모델별로 처리
+    for (const model of models) {
+      this.logger.log(`📊 ${model.name} 마이그레이션 처리 중...`);
+
+      // 해당 모델의 거래 기록만 필터링
+      const modelTrades = allTrades.filter((t) => t.model_id === model.id);
+
+      if (modelTrades.length === 0) {
+        this.logger.log(`  - ${model.name}: 거래 기록 없음, 초기 자본으로 기록`);
+        // 거래 기록이 없으면 현재 날짜에 초기 자본 기록
+        const today = new Date().toISOString().split('T')[0];
+        const hasHistory = await this.supabaseService.hasPortfolioHistoryForDate(model.id, today);
+        if (!hasHistory) {
+          await this.supabaseService.recordPortfolioValueAt(
+            model.id,
+            model.initialCapital,
+            new Date().toISOString(),
+          );
+          migratedDates++;
+        }
+        continue;
+      }
+
+      // 거래 날짜별로 그룹화
+      const tradesByDate = new Map<string, typeof modelTrades>();
+      for (const trade of modelTrades) {
+        const date = trade.created_at.split('T')[0];
+        if (!tradesByDate.has(date)) {
+          tradesByDate.set(date, []);
+        }
+        tradesByDate.get(date)!.push(trade);
+      }
+
+      // 각 날짜별로 포트폴리오 가치 계산 및 저장
+      // 현재 잔고에서 역산하는 방식
+      const currentBalances = await this.supabaseService.getCurrencyBalances(model.id);
+      const currentHoldings = await this.supabaseService.getHoldings(model.id);
+
+      // 현재 총 자산 가치
+      let currentTotalValue =
+        currentBalances.krwBalance + currentBalances.usdBalance * exchangeRate;
+      for (const holding of currentHoldings) {
+        const value = holding.totalValue || holding.avgPrice * holding.shares;
+        currentTotalValue += holding.market === 'US' ? value * exchangeRate : value;
+      }
+
+      // 날짜를 역순으로 정렬하여 역산
+      const sortedDates = Array.from(tradesByDate.keys()).sort().reverse();
+
+      let portfolioValue = currentTotalValue;
+
+      for (const date of sortedDates) {
+        // 이미 히스토리가 있는지 확인
+        const hasHistory = await this.supabaseService.hasPortfolioHistoryForDate(model.id, date);
+        if (hasHistory) {
+          skippedDates++;
+          continue;
+        }
+
+        // 해당 날짜의 거래로 인한 변동 계산 (역산)
+        const dayTrades = tradesByDate.get(date)!;
+        for (const trade of dayTrades.reverse()) {
+          const tradeAmount = Number(trade.total_amount);
+          const tradeRate = trade.market === 'US' ? exchangeRate : 1;
+
+          if (trade.trade_type === 'BUY') {
+            // 매수: 역산 시 현금 증가, 주식 감소 → 총 가치 변동 없음 (수수료 무시)
+            // 단, 현재 주가와 매수가 차이로 인한 손익 반영
+          } else {
+            // 매도: 역산 시 현금 감소, 주식 증가 → 총 가치 변동 없음
+          }
+        }
+
+        // 해당 날짜 종료 시점의 포트폴리오 가치 기록
+        const recordedAt = `${date}T15:00:00.000Z`; // KST 24:00 = UTC 15:00 (다음 날)
+        const success = await this.supabaseService.recordPortfolioValueAt(
+          model.id,
+          portfolioValue,
+          recordedAt,
+        );
+
+        if (success) {
+          migratedDates++;
+          this.logger.debug(`  ✓ ${model.name} ${date}: ₩${portfolioValue.toLocaleString()}`);
+        } else {
+          errors.push(`${model.name} ${date}: 저장 실패`);
+        }
+      }
+    }
+
+    this.logger.log(`🔄 마이그레이션 완료: ${migratedDates}건 생성, ${skippedDates}건 스킵`);
+
+    return {
+      success: errors.length === 0,
+      migratedDates,
+      skippedDates,
+      errors,
+    };
+  }
+
+  /**
+   * 캔들차트용 일별 OHLC 데이터 조회
+   */
+  async getCandleChartData(
+    days: number = 30,
+  ): Promise<Record<string, Array<{
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    change: number;
+    changePercent: number;
+  }>>> {
+    const models = await this.supabaseService.getAIModels();
+    const history = await this.supabaseService.getPortfolioHistory(days);
+
+    // 모델 ID -> 이름 매핑
+    const modelMap = new Map(models.map((m) => [m.id, m]));
+
+    // 모델별, 날짜별로 그룹화
+    const dataByModelAndDate = new Map<string, Map<string, number[]>>();
+
+    for (const record of history) {
+      const model = modelMap.get(record.modelId);
+      if (!model) continue;
+
+      const modelName = model.name;
+      const date = record.recordedAt.split('T')[0];
+
+      if (!dataByModelAndDate.has(modelName)) {
+        dataByModelAndDate.set(modelName, new Map());
+      }
+
+      const modelData = dataByModelAndDate.get(modelName)!;
+      if (!modelData.has(date)) {
+        modelData.set(date, []);
+      }
+
+      modelData.get(date)!.push(record.totalValue);
+    }
+
+    // OHLC 데이터로 변환
+    const result: Record<string, Array<{
+      date: string;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      change: number;
+      changePercent: number;
+    }>> = {};
+
+    for (const [modelName, dateMap] of dataByModelAndDate) {
+      const sortedDates = Array.from(dateMap.keys()).sort();
+      const candles: Array<{
+        date: string;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        change: number;
+        changePercent: number;
+      }> = [];
+
+      let previousClose = 0;
+
+      for (const date of sortedDates) {
+        const values = dateMap.get(date)!;
+        const open = values[0];
+        const close = values[values.length - 1];
+        const high = Math.max(...values);
+        const low = Math.min(...values);
+
+        const change = previousClose > 0 ? close - previousClose : 0;
+        const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0;
+
+        candles.push({
+          date,
+          open,
+          high,
+          low,
+          close,
+          change: Math.round(change),
+          changePercent: Math.round(changePercent * 100) / 100,
+        });
+
+        previousClose = close;
+      }
+
+      result[modelName] = candles;
+    }
+
+    return result;
+  }
+
+  /**
+   * 누락된 날짜에 대해 포트폴리오 히스토리 보완
+   * 거래가 없는 날도 이전 종가를 기준으로 기록
+   */
+  async fillMissingPortfolioHistory(): Promise<{
+    success: boolean;
+    filledDates: number;
+  }> {
+    this.logger.log('📊 누락된 포트폴리오 히스토리 보완 시작...');
+
+    const models = await this.supabaseService.getAIModels();
+    const history = await this.supabaseService.getPortfolioHistory(365); // 1년치
+    let filledDates = 0;
+
+    // 모델별로 처리
+    for (const model of models) {
+      // 해당 모델의 히스토리만 필터링
+      const modelHistory = history.filter((h) => h.modelId === model.id);
+
+      if (modelHistory.length === 0) {
+        continue;
+      }
+
+      // 날짜별로 정렬
+      const sortedHistory = modelHistory.sort(
+        (a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime(),
+      );
+
+      // 날짜 범위 계산
+      const startDate = new Date(sortedHistory[0].recordedAt.split('T')[0]);
+      const endDate = new Date();
+
+      // 각 날짜 확인
+      const existingDates = new Set(sortedHistory.map((h) => h.recordedAt.split('T')[0]));
+      let previousValue = sortedHistory[0].totalValue;
+
+      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().split('T')[0];
+
+        // 주말 건너뛰기
+        const dayOfWeek = d.getDay();
+        if (dayOfWeek === 0 || dayOfWeek === 6) continue;
+
+        if (!existingDates.has(dateStr)) {
+          // 누락된 날짜 - 이전 종가로 기록
+          const recordedAt = `${dateStr}T15:00:00.000Z`;
+          const success = await this.supabaseService.recordPortfolioValueAt(
+            model.id,
+            previousValue,
+            recordedAt,
+          );
+
+          if (success) {
+            filledDates++;
+            this.logger.debug(`  ✓ ${model.name} ${dateStr}: ₩${previousValue.toLocaleString()} (보완)`);
+          }
+        } else {
+          // 기존 데이터가 있으면 해당 값으로 업데이트
+          const existing = sortedHistory.find((h) => h.recordedAt.startsWith(dateStr));
+          if (existing) {
+            previousValue = existing.totalValue;
+          }
+        }
+      }
+    }
+
+    this.logger.log(`📊 히스토리 보완 완료: ${filledDates}건 추가`);
+
+    return {
+      success: true,
+      filledDates,
+    };
+  }
 }

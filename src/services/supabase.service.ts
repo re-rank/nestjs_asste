@@ -527,4 +527,97 @@ export class SupabaseService implements OnModuleInit {
       recordedAt: row.recorded_at,
     }));
   }
+
+  /**
+   * 전체 거래 기록 조회 (마이그레이션용)
+   */
+  async getAllTrades(): Promise<DBTrade[]> {
+    if (!this.supabase) {
+      this.logger.error('Supabase client not initialized');
+      return [];
+    }
+
+    const { data, error } = await this.supabase
+      .from('ai_trades')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      this.logger.error('Failed to fetch all trades:', error);
+      return [];
+    }
+
+    return data as DBTrade[];
+  }
+
+  /**
+   * 특정 날짜의 포트폴리오 히스토리 존재 여부 확인
+   */
+  async hasPortfolioHistoryForDate(modelId: string, date: string): Promise<boolean> {
+    if (!this.supabase) return false;
+
+    const startOfDay = `${date}T00:00:00.000Z`;
+    const endOfDay = `${date}T23:59:59.999Z`;
+
+    const { data, error } = await this.supabase
+      .from('ai_portfolio_history')
+      .select('id')
+      .eq('model_id', modelId)
+      .gte('recorded_at', startOfDay)
+      .lte('recorded_at', endOfDay)
+      .limit(1);
+
+    if (error) {
+      this.logger.error('Failed to check portfolio history:', error);
+      return false;
+    }
+
+    return data && data.length > 0;
+  }
+
+  /**
+   * 특정 시간에 포트폴리오 가치 기록 (마이그레이션용)
+   */
+  async recordPortfolioValueAt(
+    modelId: string,
+    totalValue: number,
+    recordedAt: string,
+  ): Promise<boolean> {
+    if (!this.supabase) {
+      this.logger.error('Supabase client not initialized');
+      return false;
+    }
+
+    const { error } = await this.supabase.from('ai_portfolio_history').insert({
+      model_id: modelId,
+      total_value: totalValue,
+      recorded_at: recordedAt,
+    });
+
+    if (error) {
+      this.logger.error(`Failed to record portfolio value at ${recordedAt}:`, error);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * 가장 오래된 포트폴리오 히스토리 날짜 조회
+   */
+  async getEarliestPortfolioHistoryDate(): Promise<string | null> {
+    if (!this.supabase) return null;
+
+    const { data, error } = await this.supabase
+      .from('ai_portfolio_history')
+      .select('recorded_at')
+      .order('recorded_at', { ascending: true })
+      .limit(1);
+
+    if (error || !data || data.length === 0) {
+      return null;
+    }
+
+    return data[0].recorded_at.split('T')[0];
+  }
 }

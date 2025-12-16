@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Param,
+  Query,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -204,8 +205,9 @@ export class TradingController {
    * 포트폴리오 히스토리 조회 (차트용)
    */
   @Get('api/portfolio-history')
-  async getPortfolioHistory() {
-    const history = await this.supabaseService.getPortfolioHistory(30);
+  async getPortfolioHistory(@Query('days') days?: string) {
+    const daysNum = days ? parseInt(days, 10) : 30;
+    const history = await this.supabaseService.getPortfolioHistory(daysNum);
     const models = await this.supabaseService.getAIModels();
 
     // 모델 ID -> 이름 매핑
@@ -237,6 +239,88 @@ export class TradingController {
       latestDate: chartData.length > 0 ? chartData[chartData.length - 1].date : null,
       data: chartData,
     };
+  }
+
+  /**
+   * 캔들차트 데이터 조회 (일별 OHLC)
+   */
+  @Get('api/candle-chart')
+  async getCandleChart(@Query('days') days?: string) {
+    const daysNum = days ? parseInt(days, 10) : 30;
+
+    try {
+      const candleData = await this.tradingService.getCandleChartData(daysNum);
+      const models = Object.keys(candleData);
+
+      // 날짜 범위 계산
+      let startDate: string | null = null;
+      let endDate: string | null = null;
+
+      for (const modelData of Object.values(candleData)) {
+        if (modelData.length > 0) {
+          const firstDate = modelData[0].date;
+          const lastDate = modelData[modelData.length - 1].date;
+
+          if (!startDate || firstDate < startDate) startDate = firstDate;
+          if (!endDate || lastDate > endDate) endDate = lastDate;
+        }
+      }
+
+      return {
+        success: true,
+        models,
+        dateRange: {
+          start: startDate,
+          end: endDate,
+        },
+        data: candleData,
+      };
+    } catch (error) {
+      throw new HttpException(
+        `Failed to get candle chart: ${error}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * 거래 기록에서 포트폴리오 히스토리 마이그레이션
+   */
+  @Post('api/migrate-portfolio-history')
+  async migratePortfolioHistory() {
+    try {
+      const result = await this.tradingService.migratePortfolioHistoryFromTrades();
+      return {
+        success: result.success,
+        message: `마이그레이션 완료: ${result.migratedDates}건 생성, ${result.skippedDates}건 스킵`,
+        ...result,
+      };
+    } catch (error) {
+      throw new HttpException(
+        `Migration failed: ${error}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * 누락된 포트폴리오 히스토리 보완
+   */
+  @Post('api/fill-portfolio-history')
+  async fillPortfolioHistory() {
+    try {
+      const result = await this.tradingService.fillMissingPortfolioHistory();
+      return {
+        success: result.success,
+        message: `히스토리 보완 완료: ${result.filledDates}건 추가`,
+        ...result,
+      };
+    } catch (error) {
+      throw new HttpException(
+        `Fill history failed: ${error}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   private isDaylightSavingTime(): boolean {

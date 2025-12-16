@@ -247,3 +247,27 @@ export interface DBPortfolioHistory {
   total_value: number;
   recorded_at: string;
 }
+
+// 캔들차트 데이터 (일별 OHLC)
+export interface PortfolioCandleData {
+  date: string;
+  modelId: string;
+  modelName?: string;
+  open: number;    // 시가 (해당 일 첫 기록)
+  high: number;    // 고가 (해당 일 최고값)
+  low: number;     // 저가 (해당 일 최저값)
+  close: number;   // 종가 (해당 일 마지막 기록)
+  change: number;  // 전일 대비 변동액
+  changePercent: number; // 전일 대비 변동률
+}
+
+// 프론트엔드용 차트 응답
+export interface CandleChartResponse {
+  success: boolean;
+  models: string[];
+  dateRange: {
+    start: string;
+    end: string;
+  };
+  data: Record<string, PortfolioCandleData[]>; // modelName -> candle data array
+}
